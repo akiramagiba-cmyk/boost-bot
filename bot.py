@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import random
-import re
 import string
 import time
 from pathlib import Path
@@ -11,7 +10,6 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
-import aiohttp
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -36,23 +34,87 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8818345094:AAGw9CA1acbXZPgOzoPNu33tEnnMG9hcV
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5728569894"))
 ADMIN_IDS = {ADMIN_ID}
 
-STATE_DIR = Path("data")
+# State directory - sa /data para persistent sa Railway
+STATE_DIR = Path(os.getenv("DATA_DIR", "data"))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 USERS_FILE = STATE_DIR / "users.json"
 KEYS_FILE = STATE_DIR / "keys.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 
-# API Endpoints
-ZEFAME_API = 'https://app.zefame.com/api_free.php'
-TIKFAMES_API = 'https://tikfames.com/api'
-
 # Conversation states
 AWAITING_KEY = 1
 AWAITING_KEY_DURATION = 2
-AWAITING_BOOST_URL = 3
-AWAITING_BROADCAST_MESSAGE = 4
-AWAITING_REVOKE_KEY = 5
+AWAITING_BROADCAST_MESSAGE = 3
+AWAITING_REVOKE_KEY = 4
+AWAITING_USER_ID = 5
+
+# ============================================================
+# BOOST LINKS
+# ============================================================
+
+BOOST_SERVICES = {
+    # TikTok Services
+    "tiktok_views": {
+        "name": "TikTok Views",
+        "icon": "◉",
+        "url": "https://zefame.com/en/free-tiktok-views"
+    },
+    "tiktok_followers": {
+        "name": "TikTok Followers",
+        "icon": "◆",
+        "url": "https://zefame.com/en/free-tiktok-followers"
+    },
+    "tiktok_likes": {
+        "name": "TikTok Likes",
+        "icon": "♥",
+        "url": "https://zefame.com/en/free-tiktok-likes"
+    },
+    "tiktok_shares": {
+        "name": "TikTok Shares",
+        "icon": "↗",
+        "url": "https://zefame.com/en/free-tiktok-shares"
+    },
+    "tiktok_favorites": {
+        "name": "TikTok Favorites",
+        "icon": "★",
+        "url": "https://zefame.com/en/free-tiktok-saves"
+    },
+    
+    # Instagram Services
+    "instagram_views": {
+        "name": "Instagram Views",
+        "icon": "◉",
+        "url": "https://zefame.com/en/free-instagram-views"
+    },
+    "instagram_followers": {
+        "name": "Instagram Followers",
+        "icon": "◆",
+        "url": "https://zefame.com/en/free-instagram-followers"
+    },
+    "instagram_story_views": {
+        "name": "Instagram Story Views",
+        "icon": "◈",
+        "url": "https://zefame.com/en/free-instagram-story-views"
+    },
+    
+    # Facebook Services
+    "facebook_followers": {
+        "name": "Facebook Followers",
+        "icon": "◆",
+        "url": "https://zefame.com/en/free-facebook-followers"
+    },
+    "facebook_views": {
+        "name": "Facebook Video Views",
+        "icon": "◉",
+        "url": "https://zefame.com/en/free-facebook-views"
+    },
+    "facebook_post_likes": {
+        "name": "Facebook Post Likes",
+        "icon": "♥",
+        "url": "https://zefame.com/en/free-facebook-post-likes"
+    },
+}
 
 # ============================================================
 # DATA MODELS
@@ -63,7 +125,7 @@ class User:
     user_id: int
     username: str = ""
     first_name: str = ""
-    total_boosts: int = 0
+    total_clicks: int = 0
     joined_at: float = 0.0
     is_banned: bool = False
     access_expires: float = 0.0
@@ -87,34 +149,8 @@ class AccessKey:
 @dataclass
 class BotSettings:
     maintenance_mode: bool = False
-    total_boosts_done: int = 0
-    daily_boost_limit: int = 10
-    premium_boost_limit: int = 50
+    total_clicks: int = 0
     key_required: bool = True
-
-# ============================================================
-# SERVICE CONFIGURATION
-# ============================================================
-
-SERVICES = {
-    "tiktok_views": {"name": "TikTok Views", "icon": "◉", "api": "tikfames"},
-    "tiktok_likes": {"name": "TikTok Likes", "icon": "♥", "api": "tikfames"},
-    "tiktok_followers": {"name": "TikTok Followers", "icon": "◆", "api": "tikfames"},
-    "tiktok_favorites": {"name": "TikTok Favorites", "icon": "★", "api": "tikfames"},
-    "tiktok_shares": {"name": "TikTok Shares", "icon": "↗", "api": "tikfames"},
-    "instagram_likes": {"name": "Instagram Likes", "icon": "♥", "api": "zefame", "service_id": "234"},
-    "instagram_views": {"name": "Instagram Views", "icon": "◉", "api": "zefame", "service_id": "237"},
-    "instagram_followers": {"name": "Instagram Followers", "icon": "◆", "api": "zefame", "service_id": "233"},
-    "facebook_followers": {"name": "Facebook Followers", "icon": "◆", "api": "zefame", "service_id": "244"},
-}
-
-TIKFAMES_SERVICE_MAP = {
-    "tiktok_views": "video_views",
-    "tiktok_likes": "video_likes",
-    "tiktok_followers": "followers",
-    "tiktok_favorites": "video_favorites",
-    "tiktok_shares": "video_shares",
-}
 
 # ============================================================
 # GLOBAL STATE
@@ -123,8 +159,6 @@ TIKFAMES_SERVICE_MAP = {
 USERS: Dict[int, User] = {}
 KEYS: Dict[str, AccessKey] = {}
 SETTINGS = BotSettings()
-BOOST_COOLDOWNS: Dict[int, float] = {}
-DAILY_BOOSTS: Dict[int, Dict[str, int]] = {}
 
 # ============================================================
 # LOGGING
@@ -134,14 +168,15 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger("boost-bot")
+logger = logging.getLogger("clout-boost-bot")
 
 # ============================================================
 # STATE MANAGEMENT
 # ============================================================
 
 def load_state():
-    global USERS, KEYS, SETTINGS, DAILY_BOOSTS
+    """Load all state from files"""
+    global USERS, KEYS, SETTINGS
     
     if USERS_FILE.exists():
         try:
@@ -149,6 +184,7 @@ def load_state():
                 data = json.load(f)
                 for uid, user_data in data.items():
                     USERS[int(uid)] = User(**user_data)
+            logger.info(f"Loaded {len(USERS)} users")
         except Exception as e:
             logger.error(f"Failed to load users: {e}")
     
@@ -158,6 +194,7 @@ def load_state():
                 data = json.load(f)
                 for key, key_data in data.items():
                     KEYS[key] = AccessKey(**key_data)
+            logger.info(f"Loaded {len(KEYS)} keys")
         except Exception as e:
             logger.error(f"Failed to load keys: {e}")
     
@@ -170,6 +207,7 @@ def load_state():
             logger.error(f"Failed to load settings: {e}")
 
 def save_users():
+    """Save users to file"""
     try:
         with USERS_FILE.open("w") as f:
             json.dump({str(k): asdict(v) for k, v in USERS.items()}, f, indent=2)
@@ -177,6 +215,7 @@ def save_users():
         logger.error(f"Failed to save users: {e}")
 
 def save_keys():
+    """Save keys to file"""
     try:
         with KEYS_FILE.open("w") as f:
             json.dump({k: asdict(v) for k, v in KEYS.items()}, f, indent=2)
@@ -184,6 +223,7 @@ def save_keys():
         logger.error(f"Failed to save keys: {e}")
 
 def save_settings():
+    """Save settings to file"""
     try:
         with SETTINGS_FILE.open("w") as f:
             json.dump(asdict(SETTINGS), f, indent=2)
@@ -192,7 +232,12 @@ def save_settings():
 
 def get_or_create_user(user_id: int, username: str = "", first_name: str = "") -> User:
     if user_id not in USERS:
-        user = User(user_id=user_id, username=username, first_name=first_name, joined_at=time.time())
+        user = User(
+            user_id=user_id,
+            username=username,
+            first_name=first_name,
+            joined_at=time.time()
+        )
         USERS[user_id] = user
         save_users()
     else:
@@ -211,6 +256,7 @@ def is_banned(user_id: int) -> bool:
     return user_id in USERS and USERS[user_id].is_banned
 
 def has_access(user_id: int) -> bool:
+    """Check if user has valid access"""
     if is_admin(user_id):
         return True
     if user_id not in USERS:
@@ -223,6 +269,7 @@ def has_access(user_id: int) -> bool:
     return False
 
 def get_access_status(user_id: int) -> str:
+    """Get access status message"""
     if is_admin(user_id):
         return "ADMIN"
     if not has_access(user_id):
@@ -243,6 +290,7 @@ def get_access_status(user_id: int) -> str:
 # ============================================================
 
 def generate_key() -> str:
+    """Generate unique key"""
     chars = string.ascii_uppercase + string.digits
     while True:
         key = "CLOUT-" + "".join(random.choices(chars, k=12))
@@ -256,8 +304,9 @@ def create_access_key(
     created_by: int = 0,
     note: str = ""
 ) -> AccessKey:
+    """Create new access key"""
     key = generate_key()
-    key_expires = time.time() + (7 * 86400)
+    key_expires = time.time() + (30 * 86400)  # Key expires in 30 days if not used
     
     access_key = AccessKey(
         key=key,
@@ -275,6 +324,7 @@ def create_access_key(
     return access_key
 
 def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
+    """Redeem access key"""
     key_string = key_string.strip().upper()
     
     if key_string not in KEYS:
@@ -300,6 +350,7 @@ def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
     
     current_time = time.time()
     
+    # If user already has access, extend it
     if user.access_expires > current_time and user.access_expires != float('inf'):
         user.access_expires += access_duration
     else:
@@ -321,15 +372,17 @@ def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
     return {
         "success": True,
         "message": (
-            "▸ ACCESS ACTIVATED SUCCESSFULLY\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"◈ Duration : {duration_msg}\n"
-            f"◈ Key      : {key_string}\n\n"
-            "▸ You can now use the boost services."
+            "╔════════════════════════════╗\n"
+            "║   ACCESS ACTIVATED         ║\n"
+            "╚════════════════════════════╝\n\n"
+            f"▸ Duration : {duration_msg}\n"
+            f"▸ Key      : {key_string}\n\n"
+            "You can now access all boost services!"
         )
     }
 
 def revoke_key(key_string: str) -> Dict[str, Any]:
+    """Revoke key and remove user access"""
     key_string = key_string.strip().upper()
     
     if key_string not in KEYS:
@@ -343,160 +396,18 @@ def revoke_key(key_string: str) -> Dict[str, Any]:
         if user:
             user.access_expires = 0
             user.current_key = ""
+            save_users()
     
     save_keys()
-    save_users()
     
     return {"success": True, "message": f"✓ Key {key_string} has been revoked."}
-
-# ============================================================
-# API FUNCTIONS
-# ============================================================
-
-def generate_token() -> str:
-    chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-    token = '0cAFcWeA4'
-    for _ in range(2000):
-        token += chars[random.randint(0, len(chars)-1)]
-    return token
-
-def generate_session_id() -> str:
-    chars = 'abcdef0123456789'
-    session = ''
-    for _ in range(40):
-        session += chars[random.randint(0, len(chars)-1)]
-    return session
-
-REFERER_MAP = {
-    'video_views': 'https://tikfames.com/free-tiktok-video-views',
-    'video_likes': 'https://tikfames.com/free-tiktok-likes',
-    'followers': 'https://tikfames.com/free-tiktok-followers',
-    'video_favorites': 'https://tikfames.com/free-tiktok-favorites',
-    'video_shares': 'https://tikfames.com/free-tiktok-shares',
-}
-
-def get_tikfames_headers(boost_type: str, cookie: Optional[str] = None) -> Dict[str, str]:
-    referer = REFERER_MAP.get(boost_type, REFERER_MAP['video_views'])
-    session_cookie = cookie or f"ci_session={generate_session_id()}"
-    
-    return {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json',
-        'Origin': 'https://tikfames.com',
-        'Referer': referer,
-        'Cookie': session_cookie,
-    }
-
-async def get_tiktok_video_details(session: aiohttp.ClientSession, video_url: str, boost_type: str) -> Optional[Dict]:
-    payload = {
-        'input': video_url,
-        'type': 'videoDetails',
-        'recaptchaToken': generate_token(),
-    }
-    
-    try:
-        async with session.post(
-            f'{TIKFAMES_API}/search',
-            headers=get_tikfames_headers(boost_type),
-            json=payload
-        ) as response:
-            text = await response.text()
-            if response.status != 200:
-                return None
-            data = json.loads(text)
-            if data.get('error') or not data.get('success'):
-                return None
-            return data
-    except Exception as e:
-        logger.error(f'TikFames search error: {e}')
-        return None
-
-async def process_tikfames_boost(session: aiohttp.ClientSession, video_details: Dict, boost_type: str) -> Dict[str, Any]:
-    payload = {
-        'username': video_details.get('username', video_details.get('author', {}).get('uniqueId', '')),
-        'aweme_id': video_details.get('aweme_id', video_details.get('id', '')),
-        'user_id': video_details.get('user_id', video_details.get('author', {}).get('id', '')),
-        'sec_uid': video_details.get('sec_uid', video_details.get('author', {}).get('secUid', '')),
-        'aweme_avatar': video_details.get('aweme_avatar', video_details.get('author', {}).get('avatarThumb', '')),
-        'stats': video_details.get('stats', {}),
-        'type': boost_type,
-        'success': True,
-        'recaptchaToken': generate_token(),
-    }
-    
-    try:
-        async with session.post(
-            f'{TIKFAMES_API}/process',
-            headers=get_tikfames_headers(boost_type),
-            json=payload
-        ) as response:
-            text = await response.text()
-            if response.status != 200:
-                return {'success': False, 'message': f'API error: {response.status}'}
-            
-            data = json.loads(text)
-            if data.get('success') is True:
-                return {'success': True, 'message': data.get('message', 'Boost submitted successfully')}
-            return {'success': False, 'message': data.get('message', 'Boost failed')}
-    except Exception as e:
-        logger.error(f'TikFames process error: {e}')
-        return {'success': False, 'message': 'Processing error'}
-
-async def handle_tiktok_boost(session: aiohttp.ClientSession, url: str, service: str) -> Dict[str, Any]:
-    boost_type = TIKFAMES_SERVICE_MAP[service]
-    video_details = await get_tiktok_video_details(session, url, boost_type)
-    if not video_details:
-        return {'success': False, 'message': 'Failed to fetch video details'}
-    return await process_tikfames_boost(session, video_details, boost_type)
-
-async def handle_zefame_boost(session: aiohttp.ClientSession, url: str, service: str) -> Dict[str, Any]:
-    service_id = SERVICES[service].get('service_id')
-    uuid = f"{random.randint(10000000, 99999999)}-{random.randint(1000, 9999)}-{random.randint(1000, 9999)}-{random.randint(1000, 9999)}-{random.randint(100000000000, 999999999999)}"
-    
-    form_data = {
-        'service': service_id,
-        'link': url,
-        'uuid': uuid,
-    }
-    
-    if service == 'instagram_followers':
-        username = url.replace('@', '')
-        form_data['username'] = username
-        form_data['link'] = f'https://www.instagram.com/{username}'
-    
-    headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://zefame.com',
-        'Referer': 'https://zefame.com/',
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36',
-    }
-    
-    try:
-        async with session.post(
-            f'{ZEFAME_API}?action=order',
-            headers=headers,
-            data=form_data
-        ) as response:
-            text = await response.text()
-            try:
-                result = json.loads(text)
-            except:
-                return {'success': False, 'message': 'Invalid response from service'}
-            
-            success = result.get('success') == 1 or result.get('success') is True
-            message = result.get('message', 'Order submitted successfully' if success else 'Failed to process order')
-            return {'success': success, 'message': message}
-    except Exception as e:
-        logger.error(f'Zefame error: {e}')
-        return {'success': False, 'message': 'Service error'}
 
 # ============================================================
 # KEYBOARDS
 # ============================================================
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    """Main menu keyboard"""
     if is_admin(user_id):
         rows = [
             ["▸ Boost Services", "▸ My Statistics"],
@@ -516,40 +427,60 @@ def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-def service_keyboard() -> InlineKeyboardMarkup:
-    keyboard = []
-    row = []
-    
-    for service_id, service in SERVICES.items():
-        button = InlineKeyboardButton(
-            f"{service['icon']} {service['name']}",
-            callback_data=f"service:{service_id}"
-        )
-        row.append(button)
-        
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    
-    if row:
-        keyboard.append(row)
-    
-    keyboard.append([
-        InlineKeyboardButton("« Main Menu", callback_data="main_menu")
-    ])
-    
+def boost_category_keyboard() -> InlineKeyboardMarkup:
+    """Category selection keyboard"""
+    keyboard = [
+        [InlineKeyboardButton("◈ TikTok Services", callback_data="category:tiktok")],
+        [InlineKeyboardButton("◈ Instagram Services", callback_data="category:instagram")],
+        [InlineKeyboardButton("◈ Facebook Services", callback_data="category:facebook")],
+        [InlineKeyboardButton("« Main Menu", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def tiktok_services_keyboard() -> InlineKeyboardMarkup:
+    """TikTok services keyboard with direct links"""
+    keyboard = [
+        [InlineKeyboardButton("◉ TikTok Views - Boost Now", url="https://zefame.com/en/free-tiktok-views")],
+        [InlineKeyboardButton("◆ TikTok Followers - Boost Now", url="https://zefame.com/en/free-tiktok-followers")],
+        [InlineKeyboardButton("♥ TikTok Likes - Boost Now", url="https://zefame.com/en/free-tiktok-likes")],
+        [InlineKeyboardButton("↗ TikTok Shares - Boost Now", url="https://zefame.com/en/free-tiktok-shares")],
+        [InlineKeyboardButton("★ TikTok Favorites - Boost Now", url="https://zefame.com/en/free-tiktok-saves")],
+        [InlineKeyboardButton("« Back to Categories", callback_data="back_to_categories")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def instagram_services_keyboard() -> InlineKeyboardMarkup:
+    """Instagram services keyboard with direct links"""
+    keyboard = [
+        [InlineKeyboardButton("◉ Instagram Views - Boost Now", url="https://zefame.com/en/free-instagram-views")],
+        [InlineKeyboardButton("◆ Instagram Followers - Boost Now", url="https://zefame.com/en/free-instagram-followers")],
+        [InlineKeyboardButton("◈ Instagram Story Views - Boost Now", url="https://zefame.com/en/free-instagram-story-views")],
+        [InlineKeyboardButton("« Back to Categories", callback_data="back_to_categories")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def facebook_services_keyboard() -> InlineKeyboardMarkup:
+    """Facebook services keyboard with direct links"""
+    keyboard = [
+        [InlineKeyboardButton("◆ Facebook Followers - Boost Now", url="https://zefame.com/en/free-facebook-followers")],
+        [InlineKeyboardButton("◉ Facebook Video Views - Boost Now", url="https://zefame.com/en/free-facebook-views")],
+        [InlineKeyboardButton("♥ Facebook Post Likes - Boost Now", url="https://zefame.com/en/free-facebook-post-likes")],
+        [InlineKeyboardButton("« Back to Categories", callback_data="back_to_categories")],
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 def admin_keyboard() -> ReplyKeyboardMarkup:
+    """Admin panel keyboard"""
     rows = [
         ["▸ Generate Key", "▸ List Keys"],
-        ["▸ Global Stats", "▸ User List"],
-        ["▸ Revoke Key", "▸ Broadcast"],
-        ["▸ Settings", "▸ Main Menu"]
+        ["▸ Global Stats", "▸ Revoke Key"],
+        ["▸ Broadcast", "▸ Settings"],
+        ["▸ Main Menu"]
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def key_type_keyboard() -> InlineKeyboardMarkup:
+    """Key type selection"""
     keyboard = [
         [InlineKeyboardButton("∞ Lifetime Access", callback_data="keytype:lifetime")],
         [InlineKeyboardButton("◈ Custom Duration", callback_data="keytype:custom")],
@@ -562,6 +493,7 @@ def key_type_keyboard() -> InlineKeyboardMarkup:
 # ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start command handler"""
     user = update.effective_user
     
     if is_banned(user.id):
@@ -582,12 +514,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "▸ AVAILABLE SERVICES\n"
         "  ◈ TikTok Views\n"
-        "  ◈ TikTok Likes\n"
         "  ◈ TikTok Followers\n"
-        "  ◈ Instagram Likes\n"
+        "  ◈ TikTok Likes\n"
+        "  ◈ TikTok Shares\n"
+        "  ◈ TikTok Favorites\n"
         "  ◈ Instagram Views\n"
         "  ◈ Instagram Followers\n"
-        "  ◈ Facebook Followers\n\n"
+        "  ◈ Instagram Story Views\n"
+        "  ◈ Facebook Followers\n"
+        "  ◈ Facebook Views\n"
+        "  ◈ Facebook Post Likes\n\n"
     )
     
     if not has_access(user.id) and not is_admin(user.id):
@@ -613,7 +549,102 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(user.id)
     )
 
+async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show boost service categories"""
+    user = update.effective_user
+    
+    if is_banned(user.id):
+        await update.message.reply_text("× You are banned from this bot.")
+        return ConversationHandler.END
+    
+    if SETTINGS.maintenance_mode and not is_admin(user.id):
+        await update.message.reply_text("× Bot is under maintenance. Try again later.")
+        return ConversationHandler.END
+    
+    if not has_access(user.id):
+        await update.message.reply_text(
+            "× You need access to use boost services.\n\n"
+            "▸ Get your key from admin\n"
+            "▸ Use '▸ Get Access' to redeem!",
+            reply_markup=main_keyboard(user.id)
+        )
+        return ConversationHandler.END
+    
+    # Track click
+    USERS[user.id].total_clicks += 1
+    SETTINGS.total_clicks += 1
+    save_users()
+    save_settings()
+    
+    await update.message.reply_text(
+        "╔════════════════════════════╗\n"
+        "║    BOOST SERVICES          ║\n"
+        "╚════════════════════════════╝\n\n"
+        "▸ Select a platform :",
+        reply_markup=boost_category_keyboard()
+    )
+    
+    return ConversationHandler.END
+
+async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle boost service selection"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "main_menu":
+        await query.edit_message_text("▸ Returning to main menu...")
+        await context.bot.send_message(
+            query.message.chat_id,
+            "▸ Main Menu :",
+            reply_markup=main_keyboard(query.from_user.id)
+        )
+        return ConversationHandler.END
+    
+    if data == "back_to_categories":
+        await query.edit_message_text(
+            "▸ Select a platform :",
+            reply_markup=boost_category_keyboard()
+        )
+        return ConversationHandler.END
+    
+    if data == "cancel":
+        await query.edit_message_text("× Operation cancelled.")
+        return ConversationHandler.END
+    
+    if data.startswith("category:"):
+        category = data.split(":")[1]
+        
+        if category == "tiktok":
+            await query.edit_message_text(
+                "╔════════════════════════════╗\n"
+                "║    TIKTOK SERVICES         ║\n"
+                "╚════════════════════════════╝\n\n"
+                "▸ Click a service to boost :",
+                reply_markup=tiktok_services_keyboard()
+            )
+        elif category == "instagram":
+            await query.edit_message_text(
+                "╔════════════════════════════╗\n"
+                "║   INSTAGRAM SERVICES       ║\n"
+                "╚════════════════════════════╝\n\n"
+                "▸ Click a service to boost :",
+                reply_markup=instagram_services_keyboard()
+            )
+        elif category == "facebook":
+            await query.edit_message_text(
+                "╔════════════════════════════╗\n"
+                "║    FACEBOOK SERVICES       ║\n"
+                "╚════════════════════════════╝\n\n"
+                "▸ Click a service to boost :",
+                reply_markup=facebook_services_keyboard()
+            )
+    
+    return ConversationHandler.END
+
 async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt for access key"""
     user = update.effective_user
     
     if has_access(user.id):
@@ -638,6 +669,7 @@ async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AWAITING_KEY
 
 async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle key redemption"""
     key_string = update.message.text.strip()
     context.user_data['awaiting_key'] = False
     
@@ -669,50 +701,64 @@ async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
-async def boost_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user stats"""
+    user_id = update.effective_user.id
+    user = get_or_create_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
     
-    if is_banned(user.id):
-        await update.message.reply_text("× You are banned from this bot.")
-        return ConversationHandler.END
+    access_status = get_access_status(user_id)
     
-    if SETTINGS.maintenance_mode and not is_admin(user.id):
-        await update.message.reply_text("× Bot is under maintenance. Try again later.")
-        return ConversationHandler.END
+    stats_text = (
+        "╔════════════════════════════╗\n"
+        "║     YOUR STATISTICS        ║\n"
+        "╚════════════════════════════╝\n\n"
+        f"▸ Name       : {user.first_name}\n"
+        f"▸ ID         : {user.user_id}\n"
+        f"▸ Access     : {access_status}\n"
+        f"▸ Keys Used  : {user.total_keys_used}\n"
+        f"▸ Total Clicks: {user.total_clicks}\n"
+        f"▸ Joined     : {datetime.fromtimestamp(user.joined_at).strftime('%Y-%m-%d')}"
+    )
     
-    if not has_access(user.id):
-        await update.message.reply_text(
-            "× You need access to use boost services.\n\n"
-            "▸ Get your key from admin\n"
-            "▸ Use '▸ Get Access' to redeem!",
-            reply_markup=main_keyboard(user.id)
-        )
-        return ConversationHandler.END
+    await update.message.reply_text(stats_text)
+
+# ============================================================
+# ADMIN HANDLERS
+# ============================================================
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show admin panel"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("× Admin only.")
+        return
     
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
-        "║    BOOST SERVICES MENU     ║\n"
+        "║      ADMIN PANEL           ║\n"
         "╚════════════════════════════╝\n\n"
-        "▸ Select a service below :",
-        reply_markup=service_keyboard()
+        "▸ Select an option below :",
+        reply_markup=admin_keyboard()
     )
-    
-    return ConversationHandler.END
 
-async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate key from admin panel"""
+    if not is_admin(update.effective_user.id):
+        return
+    
+    await update.message.reply_text(
+        "╔════════════════════════════╗\n"
+        "║   GENERATE ACCESS KEY      ║\n"
+        "╚════════════════════════════╝\n\n"
+        "▸ Choose key type :",
+        reply_markup=key_type_keyboard()
+    )
+
+async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle key generation callback"""
     query = update.callback_query
     await query.answer()
     
     data = query.data
-    
-    if data == "main_menu":
-        await query.edit_message_text("▸ Returning to main menu...")
-        await context.bot.send_message(
-            query.message.chat_id,
-            "▸ Main Menu :",
-            reply_markup=main_keyboard(query.from_user.id)
-        )
-        return ConversationHandler.END
     
     if data == "cancel":
         await query.edit_message_text("× Operation cancelled.")
@@ -720,7 +766,6 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     
     if data.startswith("keytype:"):
         key_type = data.split(":")[1]
-        context.user_data['key_type'] = key_type
         
         if key_type == "lifetime":
             key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
@@ -753,31 +798,10 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
             )
             return AWAITING_KEY_DURATION
     
-    if data.startswith("service:"):
-        service_id = data.split(":")[1]
-        
-        if service_id not in SERVICES:
-            await query.edit_message_text("× Invalid service selected.")
-            return ConversationHandler.END
-        
-        service = SERVICES[service_id]
-        context.user_data['selected_service'] = service_id
-        context.user_data['awaiting_boost_url'] = True
-        
-        await query.edit_message_text(
-            f"{service['icon']} {service['name']}\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "▸ Send the URL to boost.\n\n"
-            "Example :\n"
-            "https://www.tiktok.com/@user/video/123456\n\n"
-            "Type /cancel to cancel."
-        )
-        
-        return AWAITING_BOOST_URL
-    
     return ConversationHandler.END
 
 async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom key duration"""
     text = update.message.text.strip()
     context.user_data['awaiting_key_duration'] = False
     
@@ -823,160 +847,8 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-async def handle_boost_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    url = update.message.text.strip()
-    service_id = context.user_data.get('selected_service')
-    context.user_data['awaiting_boost_url'] = False
-    
-    if not service_id or service_id not in SERVICES:
-        await update.message.reply_text("× Please select a service first.")
-        return ConversationHandler.END
-    
-    # Validate URL
-    if not (url.startswith("http://") or url.startswith("https://")):
-        await update.message.reply_text(
-            "× Invalid URL format.\n"
-            "▸ URL must start with http:// or https://",
-            reply_markup=main_keyboard(user.id)
-        )
-        return ConversationHandler.END
-    
-    # Check cooldown
-    cooldown_time = BOOST_COOLDOWNS.get(user.id, 0)
-    if time.time() - cooldown_time < 30:
-        remaining = int(30 - (time.time() - cooldown_time))
-        await update.message.reply_text(
-            f"× Please wait {remaining} seconds before next boost.",
-            reply_markup=main_keyboard(user.id)
-        )
-        return ConversationHandler.END
-    
-    # Check daily limit
-    today = datetime.now().strftime("%Y-%m-%d")
-    if user.id not in DAILY_BOOSTS:
-        DAILY_BOOSTS[user.id] = {}
-    
-    daily_count = DAILY_BOOSTS[user.id].get(today, 0)
-    limit = SETTINGS.premium_boost_limit if has_access(user.id) else SETTINGS.daily_boost_limit
-    
-    if daily_count >= limit:
-        await update.message.reply_text(
-            f"× Daily boost limit reached ({limit}/day).",
-            reply_markup=main_keyboard(user.id)
-        )
-        return ConversationHandler.END
-    
-    processing_msg = await update.message.reply_text(
-        "▸ Processing your request...\n"
-        "▸ Please wait..."
-    )
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            if service_id.startswith('tiktok_'):
-                result = await handle_tiktok_boost(session, url, service_id)
-            else:
-                result = await handle_zefame_boost(session, url, service_id)
-        
-        if result['success']:
-            USERS[user.id].total_boosts += 1
-            DAILY_BOOSTS[user.id][today] = daily_count + 1
-            BOOST_COOLDOWNS[user.id] = time.time()
-            SETTINGS.total_boosts_done += 1
-            
-            save_users()
-            save_settings()
-            
-            await processing_msg.edit_text(
-                "╔════════════════════════════╗\n"
-                "║    BOOST SUBMITTED         ║\n"
-                "╚════════════════════════════╝\n\n"
-                f"▸ Service : {SERVICES[service_id]['name']}\n"
-                f"▸ URL     : {url}\n"
-                f"▸ Status  : SUCCESS\n"
-                f"▸ Message : {result['message']}\n\n"
-                "Your boost will be processed shortly."
-            )
-        else:
-            await processing_msg.edit_text(
-                "╔════════════════════════════╗\n"
-                "║      BOOST FAILED          ║\n"
-                "╚════════════════════════════╝\n\n"
-                f"▸ Service : {SERVICES[service_id]['name']}\n"
-                f"▸ Reason  : {result['message']}\n\n"
-                "Please try again later."
-            )
-            
-    except Exception as e:
-        logger.error(f"Boost error: {e}")
-        await processing_msg.edit_text(
-            "× An error occurred while processing.\n"
-            "× Please try again later."
-        )
-    
-    await context.bot.send_message(
-        chat_id=user.id,
-        text="▸ Main Menu :",
-        reply_markup=main_keyboard(user.id)
-    )
-    
-    return ConversationHandler.END
-
-async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_or_create_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_boosts = DAILY_BOOSTS.get(user_id, {}).get(today, 0)
-    access_status = get_access_status(user_id)
-    limit = SETTINGS.premium_boost_limit if has_access(user_id) else SETTINGS.daily_boost_limit
-    
-    stats_text = (
-        "╔════════════════════════════╗\n"
-        "║     YOUR STATISTICS        ║\n"
-        "╚════════════════════════════╝\n\n"
-        f"▸ Name       : {user.first_name}\n"
-        f"▸ ID         : {user.user_id}\n"
-        f"▸ Access     : {access_status}\n"
-        f"▸ Keys Used  : {user.total_keys_used}\n"
-        f"▸ Total Boost: {user.total_boosts}\n"
-        f"▸ Today      : {today_boosts}/{limit}\n"
-        f"▸ Joined     : {datetime.fromtimestamp(user.joined_at).strftime('%Y-%m-%d')}"
-    )
-    
-    await update.message.reply_text(stats_text)
-
-# ============================================================
-# ADMIN HANDLERS
-# ============================================================
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("× Admin only.")
-        return
-    
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║      ADMIN PANEL           ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Select an option below :",
-        reply_markup=admin_keyboard()
-    )
-
-async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║   GENERATE ACCESS KEY      ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Choose key type :",
-        reply_markup=key_type_keyboard()
-    )
-
 async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all keys"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1019,6 +891,7 @@ async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message)
 
 async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show global stats"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1035,13 +908,14 @@ async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Active Users : {active_users}\n"
         f"▸ Total Keys   : {total_keys}\n"
         f"▸ Used Keys    : {used_keys}\n"
-        f"▸ Total Boosts : {SETTINGS.total_boosts_done}\n"
+        f"▸ Total Clicks : {SETTINGS.total_clicks}\n"
         f"▸ Maintenance  : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
     )
     
     await update.message.reply_text(stats_text)
 
 async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Revoke key from admin panel"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1059,6 +933,7 @@ async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AWAITING_REVOKE_KEY
 
 async def handle_revoke_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle key revocation"""
     key_string = update.message.text.strip().upper()
     context.user_data['awaiting_revoke_key'] = False
     
@@ -1067,6 +942,7 @@ async def handle_revoke_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Broadcast message to all users"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1083,6 +959,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AWAITING_BROADCAST_MESSAGE
 
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle broadcast"""
     message = update.message.text
     context.user_data['awaiting_broadcast'] = False
     
@@ -1112,6 +989,7 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle maintenance mode"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1122,6 +1000,7 @@ async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"▸ Maintenance mode : {status}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel current operation"""
     context.user_data.clear()
     await update.message.reply_text(
         "× Operation cancelled.",
@@ -1138,10 +1017,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     # Check for pending operations first
-    if context.user_data.get('awaiting_boost_url'):
-        await handle_boost_url(update, context)
-        return
-    
     if context.user_data.get('awaiting_key'):
         await handle_key_input(update, context)
         return
@@ -1160,7 +1035,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Regular menu navigation
     if text == "▸ Boost Services":
-        await boost_now(update, context)
+        await boost_services(update, context)
     elif text == "▸ Get Access":
         await get_access(update, context)
     elif text == "▸ Redeem Key":
@@ -1197,12 +1072,15 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 def main():
+    """Main function"""
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set!")
         return
     
+    # Load state
     load_state()
     
+    # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Conversation handlers
@@ -1227,16 +1105,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     
-    boost_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^▸ Boost Services$'), boost_now),
-        ],
-        states={
-            AWAITING_BOOST_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_boost_url)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Revoke Key$'), revoke_key_admin),
@@ -1255,11 +1123,14 @@ def main():
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(key_conv)
     application.add_handler(key_gen_conv)
-    application.add_handler(boost_conv)
     application.add_handler(admin_conv)
     
-    # Callback handler
-    application.add_handler(CallbackQueryHandler(handle_service_selection))
+    # Callback handlers
+    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
+    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
+    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
+    application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
+    application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
     
     # Menu handler (should be last)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
@@ -1268,4 +1139,5 @@ def main():
     application.run_polling()
 
 if __name__ == "__main__":
+    main()if __name__ == "__main__":
     main()
