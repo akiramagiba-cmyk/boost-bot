@@ -1138,6 +1138,6 @@ def main():
     logger.info("Clout Premium Boost Bot started!")
     application.run_polling()
 
+# TAMA ITO:
 if __name__ == "__main__":
-    main()if __name__ == "__main__":
     main()
