@@ -35,7 +35,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "5728569894"))
 ADMIN_IDS = {ADMIN_ID}
 
 # State directory - sa /data para persistent sa Railway
-STATE_DIR = Path(os.getenv("DATA_DIR", "data"))
+STATE_DIR = Path("/app/data")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 USERS_FILE = STATE_DIR / "users.json"
