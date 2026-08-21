@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
+import aiohttp
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -34,86 +35,40 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8818345094:AAGw9CA1acbXZPgOzoPNu33tEnnMG9hcV
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5728569894"))
 ADMIN_IDS = {ADMIN_ID}
 
-# State directory - sa /data para persistent sa Railway
 STATE_DIR = Path("/app/data")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 USERS_FILE = STATE_DIR / "users.json"
 KEYS_FILE = STATE_DIR / "keys.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
+TEMPMAIL_FILE = STATE_DIR / "tempmails.json"
 
 # Conversation states
 AWAITING_KEY = 1
 AWAITING_KEY_DURATION = 2
 AWAITING_BROADCAST_MESSAGE = 3
 AWAITING_REVOKE_KEY = 4
-AWAITING_USER_ID = 5
+AWAITING_TEMPMAIL_INBOX = 5
+
+# API Endpoints
+TEMPMAIL_API = "https://ceddsrestapi.vercel.app"
 
 # ============================================================
 # BOOST LINKS
 # ============================================================
 
 BOOST_SERVICES = {
-    # TikTok Services
-    "tiktok_views": {
-        "name": "TikTok Views",
-        "icon": "◉",
-        "url": "https://zefame.com/en/free-tiktok-views"
-    },
-    "tiktok_followers": {
-        "name": "TikTok Followers",
-        "icon": "◆",
-        "url": "https://zefame.com/en/free-tiktok-followers"
-    },
-    "tiktok_likes": {
-        "name": "TikTok Likes",
-        "icon": "♥",
-        "url": "https://zefame.com/en/free-tiktok-likes"
-    },
-    "tiktok_shares": {
-        "name": "TikTok Shares",
-        "icon": "↗",
-        "url": "https://zefame.com/en/free-tiktok-shares"
-    },
-    "tiktok_favorites": {
-        "name": "TikTok Favorites",
-        "icon": "★",
-        "url": "https://zefame.com/en/free-tiktok-saves"
-    },
-    
-    # Instagram Services
-    "instagram_views": {
-        "name": "Instagram Views",
-        "icon": "◉",
-        "url": "https://zefame.com/en/free-instagram-views"
-    },
-    "instagram_followers": {
-        "name": "Instagram Followers",
-        "icon": "◆",
-        "url": "https://zefame.com/en/free-instagram-followers"
-    },
-    "instagram_story_views": {
-        "name": "Instagram Story Views",
-        "icon": "◈",
-        "url": "https://zefame.com/en/free-instagram-story-views"
-    },
-    
-    # Facebook Services
-    "facebook_followers": {
-        "name": "Facebook Followers",
-        "icon": "◆",
-        "url": "https://zefame.com/en/free-facebook-followers"
-    },
-    "facebook_views": {
-        "name": "Facebook Video Views",
-        "icon": "◉",
-        "url": "https://zefame.com/en/free-facebook-views"
-    },
-    "facebook_post_likes": {
-        "name": "Facebook Post Likes",
-        "icon": "♥",
-        "url": "https://zefame.com/en/free-facebook-post-likes"
-    },
+    "tiktok_views": {"name": "TikTok Views", "icon": "◉", "url": "https://zefame.com/en/free-tiktok-views"},
+    "tiktok_followers": {"name": "TikTok Followers", "icon": "◆", "url": "https://zefame.com/en/free-tiktok-followers"},
+    "tiktok_likes": {"name": "TikTok Likes", "icon": "♥", "url": "https://zefame.com/en/free-tiktok-likes"},
+    "tiktok_shares": {"name": "TikTok Shares", "icon": "↗", "url": "https://zefame.com/en/free-tiktok-shares"},
+    "tiktok_favorites": {"name": "TikTok Favorites", "icon": "★", "url": "https://zefame.com/en/free-tiktok-saves"},
+    "instagram_views": {"name": "Instagram Views", "icon": "◉", "url": "https://zefame.com/en/free-instagram-views"},
+    "instagram_followers": {"name": "Instagram Followers", "icon": "◆", "url": "https://zefame.com/en/free-instagram-followers"},
+    "instagram_story_views": {"name": "Instagram Story Views", "icon": "◈", "url": "https://zefame.com/en/free-instagram-story-views"},
+    "facebook_followers": {"name": "Facebook Followers", "icon": "◆", "url": "https://zefame.com/en/free-facebook-followers"},
+    "facebook_views": {"name": "Facebook Video Views", "icon": "◉", "url": "https://zefame.com/en/free-facebook-views"},
+    "facebook_post_likes": {"name": "Facebook Post Likes", "icon": "♥", "url": "https://zefame.com/en/free-facebook-post-likes"},
 }
 
 # ============================================================
@@ -152,6 +107,15 @@ class BotSettings:
     total_clicks: int = 0
     key_required: bool = True
 
+@dataclass
+class TempMailAccount:
+    email: str
+    password: str
+    token: str
+    account_id: str
+    created_at: float = 0.0
+    user_id: int = 0
+
 # ============================================================
 # GLOBAL STATE
 # ============================================================
@@ -159,6 +123,7 @@ class BotSettings:
 USERS: Dict[int, User] = {}
 KEYS: Dict[str, AccessKey] = {}
 SETTINGS = BotSettings()
+TEMPMAILS: Dict[str, TempMailAccount] = {}  # user_id -> tempmail account
 
 # ============================================================
 # LOGGING
@@ -176,7 +141,7 @@ logger = logging.getLogger("clout-boost-bot")
 
 def load_state():
     """Load all state from files"""
-    global USERS, KEYS, SETTINGS
+    global USERS, KEYS, SETTINGS, TEMPMAILS
     
     if USERS_FILE.exists():
         try:
@@ -205,9 +170,18 @@ def load_state():
                 SETTINGS = BotSettings(**data)
         except Exception as e:
             logger.error(f"Failed to load settings: {e}")
+    
+    if TEMPMAIL_FILE.exists():
+        try:
+            with TEMPMAIL_FILE.open("r") as f:
+                data = json.load(f)
+                for uid, mail_data in data.items():
+                    TEMPMAILS[uid] = TempMailAccount(**mail_data)
+            logger.info(f"Loaded {len(TEMPMAILS)} tempmail accounts")
+        except Exception as e:
+            logger.error(f"Failed to load tempmails: {e}")
 
 def save_users():
-    """Save users to file"""
     try:
         with USERS_FILE.open("w") as f:
             json.dump({str(k): asdict(v) for k, v in USERS.items()}, f, indent=2)
@@ -215,7 +189,6 @@ def save_users():
         logger.error(f"Failed to save users: {e}")
 
 def save_keys():
-    """Save keys to file"""
     try:
         with KEYS_FILE.open("w") as f:
             json.dump({k: asdict(v) for k, v in KEYS.items()}, f, indent=2)
@@ -223,21 +196,22 @@ def save_keys():
         logger.error(f"Failed to save keys: {e}")
 
 def save_settings():
-    """Save settings to file"""
     try:
         with SETTINGS_FILE.open("w") as f:
             json.dump(asdict(SETTINGS), f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save settings: {e}")
 
+def save_tempmails():
+    try:
+        with TEMPMAIL_FILE.open("w") as f:
+            json.dump({k: asdict(v) for k, v in TEMPMAILS.items()}, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save tempmails: {e}")
+
 def get_or_create_user(user_id: int, username: str = "", first_name: str = "") -> User:
     if user_id not in USERS:
-        user = User(
-            user_id=user_id,
-            username=username,
-            first_name=first_name,
-            joined_at=time.time()
-        )
+        user = User(user_id=user_id, username=username, first_name=first_name, joined_at=time.time())
         USERS[user_id] = user
         save_users()
     else:
@@ -256,7 +230,6 @@ def is_banned(user_id: int) -> bool:
     return user_id in USERS and USERS[user_id].is_banned
 
 def has_access(user_id: int) -> bool:
-    """Check if user has valid access"""
     if is_admin(user_id):
         return True
     if user_id not in USERS:
@@ -269,7 +242,6 @@ def has_access(user_id: int) -> bool:
     return False
 
 def get_access_status(user_id: int) -> str:
-    """Get access status message"""
     if is_admin(user_id):
         return "ADMIN"
     if not has_access(user_id):
@@ -290,23 +262,15 @@ def get_access_status(user_id: int) -> str:
 # ============================================================
 
 def generate_key() -> str:
-    """Generate unique key"""
     chars = string.ascii_uppercase + string.digits
     while True:
         key = "CLOUT-" + "".join(random.choices(chars, k=12))
         if key not in KEYS:
             return key
 
-def create_access_key(
-    duration_days: int = 0,
-    duration_hours: int = 0,
-    is_lifetime: bool = False,
-    created_by: int = 0,
-    note: str = ""
-) -> AccessKey:
-    """Create new access key"""
+def create_access_key(duration_days: int = 0, duration_hours: int = 0, is_lifetime: bool = False, created_by: int = 0, note: str = "") -> AccessKey:
     key = generate_key()
-    key_expires = time.time() + (30 * 86400)  # Key expires in 30 days if not used
+    key_expires = time.time() + (30 * 86400)
     
     access_key = AccessKey(
         key=key,
@@ -324,7 +288,6 @@ def create_access_key(
     return access_key
 
 def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
-    """Redeem access key"""
     key_string = key_string.strip().upper()
     
     if key_string not in KEYS:
@@ -350,7 +313,6 @@ def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
     
     current_time = time.time()
     
-    # If user already has access, extend it
     if user.access_expires > current_time and user.access_expires != float('inf'):
         user.access_expires += access_duration
     else:
@@ -377,12 +339,11 @@ def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
             "╚════════════════════════════╝\n\n"
             f"▸ Duration : {duration_msg}\n"
             f"▸ Key      : {key_string}\n\n"
-            "You can now access all boost services!"
+            "You can now access all services!"
         )
     }
 
 def revoke_key(key_string: str) -> Dict[str, Any]:
-    """Revoke key and remove user access"""
     key_string = key_string.strip().upper()
     
     if key_string not in KEYS:
@@ -403,6 +364,38 @@ def revoke_key(key_string: str) -> Dict[str, Any]:
     return {"success": True, "message": f"✓ Key {key_string} has been revoked."}
 
 # ============================================================
+# TEMPMAIL FUNCTIONS
+# ============================================================
+
+async def generate_tempmail(session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
+    """Generate a temporary email account"""
+    try:
+        async with session.get(f"{TEMPMAIL_API}/tempmail/gen", timeout=30) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data
+            return None
+    except Exception as e:
+        logger.error(f"TempMail generation error: {e}")
+        return None
+
+async def check_tempmail_inbox(session: aiohttp.ClientSession, token: str) -> Optional[Dict[str, Any]]:
+    """Check temporary email inbox"""
+    try:
+        async with session.get(
+            f"{TEMPMAIL_API}/tempmail/inbox",
+            params={"token": token},
+            timeout=30
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data
+            return None
+    except Exception as e:
+        logger.error(f"TempMail inbox check error: {e}")
+        return None
+
+# ============================================================
 # KEYBOARDS
 # ============================================================
 
@@ -410,14 +403,15 @@ def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     """Main menu keyboard"""
     if is_admin(user_id):
         rows = [
-            ["▸ Boost Services", "▸ My Statistics"],
-            ["▸ Generate Key", "▸ Admin Panel"],
-            ["▸ Help"]
+            ["▸ Boost Services", "▸ Temp Mail"],
+            ["▸ My Statistics", "▸ Help"],
+            ["▸ Generate Key", "▸ Admin Panel"]
         ]
     elif has_access(user_id):
         rows = [
-            ["▸ Boost Services", "▸ My Statistics"],
-            ["▸ Redeem Key", "▸ Help"]
+            ["▸ Boost Services", "▸ Temp Mail"],
+            ["▸ My Statistics", "▸ Help"],
+            ["▸ Redeem Key"]
         ]
     else:
         rows = [
@@ -428,7 +422,6 @@ def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def boost_category_keyboard() -> InlineKeyboardMarkup:
-    """Category selection keyboard"""
     keyboard = [
         [InlineKeyboardButton("◈ TikTok Services", callback_data="category:tiktok")],
         [InlineKeyboardButton("◈ Instagram Services", callback_data="category:instagram")],
@@ -438,7 +431,6 @@ def boost_category_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def tiktok_services_keyboard() -> InlineKeyboardMarkup:
-    """TikTok services keyboard with direct links"""
     keyboard = [
         [InlineKeyboardButton("◉ TikTok Views - Boost Now", url="https://zefame.com/en/free-tiktok-views")],
         [InlineKeyboardButton("◆ TikTok Followers - Boost Now", url="https://zefame.com/en/free-tiktok-followers")],
@@ -450,7 +442,6 @@ def tiktok_services_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def instagram_services_keyboard() -> InlineKeyboardMarkup:
-    """Instagram services keyboard with direct links"""
     keyboard = [
         [InlineKeyboardButton("◉ Instagram Views - Boost Now", url="https://zefame.com/en/free-instagram-views")],
         [InlineKeyboardButton("◆ Instagram Followers - Boost Now", url="https://zefame.com/en/free-instagram-followers")],
@@ -460,7 +451,6 @@ def instagram_services_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def facebook_services_keyboard() -> InlineKeyboardMarkup:
-    """Facebook services keyboard with direct links"""
     keyboard = [
         [InlineKeyboardButton("◆ Facebook Followers - Boost Now", url="https://zefame.com/en/free-facebook-followers")],
         [InlineKeyboardButton("◉ Facebook Video Views - Boost Now", url="https://zefame.com/en/free-facebook-views")],
@@ -469,8 +459,16 @@ def facebook_services_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def tempmail_keyboard() -> InlineKeyboardMarkup:
+    """TempMail menu keyboard"""
+    keyboard = [
+        [InlineKeyboardButton("◈ Generate New Email", callback_data="tempmail:generate")],
+        [InlineKeyboardButton("◈ Check Inbox", callback_data="tempmail:inbox")],
+        [InlineKeyboardButton("« Main Menu", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 def admin_keyboard() -> ReplyKeyboardMarkup:
-    """Admin panel keyboard"""
     rows = [
         ["▸ Generate Key", "▸ List Keys"],
         ["▸ Global Stats", "▸ Revoke Key"],
@@ -480,7 +478,6 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def key_type_keyboard() -> InlineKeyboardMarkup:
-    """Key type selection"""
     keyboard = [
         [InlineKeyboardButton("∞ Lifetime Access", callback_data="keytype:lifetime")],
         [InlineKeyboardButton("◈ Custom Duration", callback_data="keytype:custom")],
@@ -506,24 +503,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     welcome_text = (
         "╔════════════════════════════╗\n"
-        "║   CLOUT PREMIUM BOOST      ║\n"
+        "║   CLOUT PREMIUM BOT        ║\n"
         "╚════════════════════════════╝\n\n"
         f"▸ Welcome, {user.first_name}!\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"◈ Access : {access_status}\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "▸ AVAILABLE SERVICES\n"
-        "  ◈ TikTok Views\n"
-        "  ◈ TikTok Followers\n"
-        "  ◈ TikTok Likes\n"
-        "  ◈ TikTok Shares\n"
-        "  ◈ TikTok Favorites\n"
-        "  ◈ Instagram Views\n"
-        "  ◈ Instagram Followers\n"
-        "  ◈ Instagram Story Views\n"
-        "  ◈ Facebook Followers\n"
-        "  ◈ Facebook Views\n"
-        "  ◈ Facebook Post Likes\n\n"
+        "  ◈ Social Media Boosting\n"
+        "  ◈ Temporary Email\n\n"
     )
     
     if not has_access(user.id) and not is_admin(user.id):
@@ -541,13 +529,180 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         welcome_text += (
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "▸ Use '▸ Boost Services' to start!"
+            "▸ Use menu buttons below to start!"
         )
     
     await update.message.reply_text(
         welcome_text,
         reply_markup=main_keyboard(user.id)
     )
+
+async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show TempMail menu"""
+    user = update.effective_user
+    
+    if is_banned(user.id):
+        await update.message.reply_text("× You are banned from this bot.")
+        return ConversationHandler.END
+    
+    if not has_access(user.id):
+        await update.message.reply_text(
+            "× You need access to use Temp Mail.\n\n"
+            "▸ Get your key from admin\n"
+            "▸ Use '▸ Get Access' to redeem!",
+            reply_markup=main_keyboard(user.id)
+        )
+        return ConversationHandler.END
+    
+    # Check if user already has tempmail
+    user_id_str = str(user.id)
+    existing_mail = TEMPMAILS.get(user_id_str)
+    
+    if existing_mail:
+        message = (
+            "╔════════════════════════════╗\n"
+            "║      TEMP MAIL             ║\n"
+            "╚════════════════════════════╝\n\n"
+            f"▸ Current Email :\n"
+            f"  {existing_mail.email}\n\n"
+            f"▸ Password : {existing_mail.password}\n\n"
+            "▸ Options :"
+        )
+    else:
+        message = (
+            "╔════════════════════════════╗\n"
+            "║      TEMP MAIL             ║\n"
+            "╚════════════════════════════╝\n\n"
+            "▸ Generate a temporary email\n"
+            "▸ Use it for registrations\n"
+            "▸ Check inbox for messages\n\n"
+            "▸ Options :"
+        )
+    
+    await update.message.reply_text(
+        message,
+        reply_markup=tempmail_keyboard()
+    )
+    
+    return ConversationHandler.END
+
+async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle TempMail actions"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "main_menu":
+        await query.edit_message_text("▸ Returning to main menu...")
+        await context.bot.send_message(
+            query.message.chat_id,
+            "▸ Main Menu :",
+            reply_markup=main_keyboard(query.from_user.id)
+        )
+        return ConversationHandler.END
+    
+    if data == "tempmail:generate":
+        # Show loading
+        await query.edit_message_text("▸ Generating temporary email...")
+        
+        async with aiohttp.ClientSession() as session:
+            result = await generate_tempmail(session)
+        
+        if result and result.get("email"):
+            # Save tempmail
+            user_id_str = str(query.from_user.id)
+            tempmail = TempMailAccount(
+                email=result.get("email", ""),
+                password=result.get("password", ""),
+                token=result.get("token", ""),
+                account_id=result.get("id", ""),
+                created_at=time.time(),
+                user_id=query.from_user.id
+            )
+            TEMPMAILS[user_id_str] = tempmail
+            save_tempmails()
+            
+            await query.edit_message_text(
+                "╔════════════════════════════╗\n"
+                "║   TEMP MAIL GENERATED      ║\n"
+                "╚════════════════════════════╝\n\n"
+                f"▸ Email    : {tempmail.email}\n"
+                f"▸ Password : {tempmail.password}\n\n"
+                "▸ Save these details!\n"
+                "▸ Use 'Check Inbox' to see messages."
+            )
+        else:
+            await query.edit_message_text(
+                "× Failed to generate email.\n"
+                "× Please try again later."
+            )
+        
+        return ConversationHandler.END
+    
+    if data == "tempmail:inbox":
+        user_id_str = str(query.from_user.id)
+        existing_mail = TEMPMAILS.get(user_id_str)
+        
+        if not existing_mail:
+            await query.edit_message_text(
+                "× No email generated yet.\n"
+                "▸ Generate one first!"
+            )
+            return ConversationHandler.END
+        
+        await query.edit_message_text("▸ Checking inbox...")
+        
+        async with aiohttp.ClientSession() as session:
+            result = await check_tempmail_inbox(session, existing_mail.token)
+        
+        if result:
+            if "error" in result:
+                await query.edit_message_text(
+                    "× Token expired or invalid.\n"
+                    "▸ Generate a new email."
+                )
+            else:
+                # Format inbox messages
+                messages = result.get("hydra:member", result.get("messages", []))
+                
+                if not messages:
+                    await query.edit_message_text(
+                        "◈ INBOX EMPTY\n\n"
+                        f"▸ Email : {existing_mail.email}\n"
+                        "▸ No messages received yet."
+                    )
+                else:
+                    inbox_text = (
+                        "╔════════════════════════════╗\n"
+                        "║      INBOX MESSAGES        ║\n"
+                        "╚════════════════════════════╝\n\n"
+                    )
+                    
+                    for msg in messages[:5]:  # Show max 5 messages
+                        sender = msg.get("from", {}).get("address", "Unknown")
+                        subject = msg.get("subject", "No Subject")
+                        date = msg.get("createdAt", "")
+                        intro = msg.get("intro", "")
+                        
+                        inbox_text += (
+                            f"▸ From    : {sender}\n"
+                            f"▸ Subject : {subject}\n"
+                            f"▸ Date    : {date}\n"
+                            f"▸ Preview : {intro}\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n"
+                        )
+                    
+                    await query.edit_message_text(inbox_text)
+        else:
+            await query.edit_message_text(
+                "× Failed to check inbox.\n"
+                "× Please try again later."
+            )
+        
+        return ConversationHandler.END
+    
+    return ConversationHandler.END
 
 async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show boost service categories"""
@@ -570,7 +725,6 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     
-    # Track click
     USERS[user.id].total_clicks += 1
     SETTINGS.total_clicks += 1
     save_users()
@@ -607,10 +761,6 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
             "▸ Select a platform :",
             reply_markup=boost_category_keyboard()
         )
-        return ConversationHandler.END
-    
-    if data == "cancel":
-        await query.edit_message_text("× Operation cancelled.")
         return ConversationHandler.END
     
     if data.startswith("category:"):
@@ -899,17 +1049,19 @@ async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_users = sum(1 for u in USERS.values() if has_access(u.user_id))
     total_keys = len(KEYS)
     used_keys = sum(1 for k in KEYS.values() if k.used_by)
+    total_tempmails = len(TEMPMAILS)
     
     stats_text = (
         "╔════════════════════════════╗\n"
         "║     GLOBAL STATISTICS      ║\n"
         "╚════════════════════════════╝\n\n"
-        f"▸ Total Users  : {total_users}\n"
-        f"▸ Active Users : {active_users}\n"
-        f"▸ Total Keys   : {total_keys}\n"
-        f"▸ Used Keys    : {used_keys}\n"
-        f"▸ Total Clicks : {SETTINGS.total_clicks}\n"
-        f"▸ Maintenance  : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
+        f"▸ Total Users   : {total_users}\n"
+        f"▸ Active Users  : {active_users}\n"
+        f"▸ Total Keys    : {total_keys}\n"
+        f"▸ Used Keys     : {used_keys}\n"
+        f"▸ Total Clicks  : {SETTINGS.total_clicks}\n"
+        f"▸ TempMails     : {total_tempmails}\n"
+        f"▸ Maintenance   : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
     )
     
     await update.message.reply_text(stats_text)
@@ -1036,6 +1188,8 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Regular menu navigation
     if text == "▸ Boost Services":
         await boost_services(update, context)
+    elif text == "▸ Temp Mail":
+        await tempmail_menu(update, context)
     elif text == "▸ Get Access":
         await get_access(update, context)
     elif text == "▸ Redeem Key":
@@ -1121,6 +1275,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
+    application.add_handler(CommandHandler("tempmail", tempmail_menu))
     application.add_handler(key_conv)
     application.add_handler(key_gen_conv)
     application.add_handler(admin_conv)
@@ -1131,13 +1286,14 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
+    application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
     
     # Menu handler (should be last)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
     
-    logger.info("Clout Premium Boost Bot started!")
+    logger.info("Clout Premium Bot with TempMail started!")
     application.run_polling()
 
-# TAMA ITO:
+
 if __name__ == "__main__":
     main()
