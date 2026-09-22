@@ -180,7 +180,7 @@ def load_state():
         except Exception as e:
             logger.error(f"Failed to load tempmails: {e}")
 
-    # ✅ FIX: Auto-register admin kung wala pa sa USERS
+    # Auto-register admin kung wala pa sa USERS
     if ADMIN_ID and ADMIN_ID not in USERS:
         USERS[ADMIN_ID] = User(
             user_id=ADMIN_ID,
@@ -502,7 +502,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log errors and prevent bot from crashing."""
     logger.error("Exception while handling an update:", exc_info=context.error)
 
-    # Notify admin (optional)
     try:
         if isinstance(update, Update) and update.effective_user:
             await context.bot.send_message(
@@ -567,6 +566,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(user.id)
     )
 
+async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show your Telegram ID and admin status"""
+    user = update.effective_user
+    await update.message.reply_text(
+        f"▸ Your ID      : {user.id}\n"
+        f"▸ Username     : @{user.username or 'none'}\n"
+        f"▸ First Name   : {user.first_name}\n"
+        f"▸ ADMIN_ID     : {ADMIN_ID}\n"
+        f"▸ Is Admin?    : {'YES ✅' if is_admin(user.id) else 'NO ❌'}\n"
+        f"▸ Has Access?  : {'YES ✅' if has_access(user.id) else 'NO ❌'}"
+    )
+
 async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -574,7 +585,6 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("× You are banned from this bot.")
         return ConversationHandler.END
 
-    # ✅ FIX: ensure user exists
     get_or_create_user(user.id, user.username or "", user.first_name or "")
 
     if not has_access(user.id):
@@ -732,7 +742,6 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show boost service categories"""
     user = update.effective_user
 
     if is_banned(user.id):
@@ -752,7 +761,6 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    # ✅ FIX: Ensure user exists BEFORE incrementing
     user_obj = get_or_create_user(user.id, user.username or "", user.first_name or "")
     user_obj.total_clicks += 1
     SETTINGS.total_clicks += 1
@@ -916,6 +924,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
+        await update.message.reply_text("× Admin only.")
         return
 
     await update.message.reply_text(
@@ -1181,7 +1190,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle menu navigation and pending operations"""
     text = update.message.text.strip()
 
-    # ✅ FIX: Ensure user is registered before anything else
     user = update.effective_user
     get_or_create_user(user.id, user.username or "", user.first_name or "")
 
@@ -1249,9 +1257,10 @@ def main():
 
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # ✅ FIX: Global error handler
+    # Global error handler
     application.add_error_handler(error_handler)
 
+    # ----- Conversation: Redeem Key -----
     key_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Get Access$'), get_access),
@@ -1263,16 +1272,26 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # ----- Conversation: Generate Key (FIXED!) -----
     key_gen_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Generate Key$'), generate_key_admin),
+            CommandHandler("genkey", generate_key_admin),
         ],
         states={
-            AWAITING_KEY_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_key_duration)],
+            AWAITING_KEY_DURATION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_key_duration),
+                CallbackQueryHandler(handle_key_generation, pattern="^keytype:"),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(handle_key_generation, pattern="^keytype:"),
+            CallbackQueryHandler(handle_key_generation, pattern="^cancel$"),
+        ],
     )
 
+    # ----- Conversation: Admin (revoke/broadcast) -----
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Revoke Key$'), revoke_key_admin),
@@ -1285,21 +1304,31 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # ----- Commands -----
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("tempmail", tempmail_menu))
+    application.add_handler(CommandHandler("whoami", whoami))
+
+    # ----- Conversations -----
     application.add_handler(key_conv)
     application.add_handler(key_gen_conv)
     application.add_handler(admin_conv)
 
+    # ----- Callback Handlers (BOOST) -----
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
+
+    # ----- Callback Handlers (KEY GEN) -----
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
+
+    # ----- Callback Handlers (TEMPMAIL) -----
     application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
 
+    # ----- Message Handler (LAST) -----
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     logger.info("Clout Premium Bot with TempMail started!")
