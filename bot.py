@@ -123,7 +123,7 @@ class TempMailAccount:
 USERS: Dict[int, User] = {}
 KEYS: Dict[str, AccessKey] = {}
 SETTINGS = BotSettings()
-TEMPMAILS: Dict[str, TempMailAccount] = {}  # user_id -> tempmail account
+TEMPMAILS: Dict[str, TempMailAccount] = {}
 
 # ============================================================
 # LOGGING
@@ -140,9 +140,8 @@ logger = logging.getLogger("clout-boost-bot")
 # ============================================================
 
 def load_state():
-    """Load all state from files"""
     global USERS, KEYS, SETTINGS, TEMPMAILS
-    
+
     if USERS_FILE.exists():
         try:
             with USERS_FILE.open("r") as f:
@@ -152,7 +151,7 @@ def load_state():
             logger.info(f"Loaded {len(USERS)} users")
         except Exception as e:
             logger.error(f"Failed to load users: {e}")
-    
+
     if KEYS_FILE.exists():
         try:
             with KEYS_FILE.open("r") as f:
@@ -162,7 +161,7 @@ def load_state():
             logger.info(f"Loaded {len(KEYS)} keys")
         except Exception as e:
             logger.error(f"Failed to load keys: {e}")
-    
+
     if SETTINGS_FILE.exists():
         try:
             with SETTINGS_FILE.open("r") as f:
@@ -170,7 +169,7 @@ def load_state():
                 SETTINGS = BotSettings(**data)
         except Exception as e:
             logger.error(f"Failed to load settings: {e}")
-    
+
     if TEMPMAIL_FILE.exists():
         try:
             with TEMPMAIL_FILE.open("r") as f:
@@ -180,6 +179,18 @@ def load_state():
             logger.info(f"Loaded {len(TEMPMAILS)} tempmail accounts")
         except Exception as e:
             logger.error(f"Failed to load tempmails: {e}")
+
+    # ✅ FIX: Auto-register admin kung wala pa sa USERS
+    if ADMIN_ID and ADMIN_ID not in USERS:
+        USERS[ADMIN_ID] = User(
+            user_id=ADMIN_ID,
+            username="admin",
+            first_name="Admin",
+            joined_at=time.time(),
+            access_expires=float("inf"),
+        )
+        save_users()
+        logger.info(f"Auto-registered admin {ADMIN_ID}")
 
 def save_users():
     try:
@@ -244,6 +255,8 @@ def has_access(user_id: int) -> bool:
 def get_access_status(user_id: int) -> str:
     if is_admin(user_id):
         return "ADMIN"
+    if user_id not in USERS:
+        return "NO ACCESS"
     if not has_access(user_id):
         return "NO ACCESS"
     user = USERS[user_id]
@@ -271,7 +284,7 @@ def generate_key() -> str:
 def create_access_key(duration_days: int = 0, duration_hours: int = 0, is_lifetime: bool = False, created_by: int = 0, note: str = "") -> AccessKey:
     key = generate_key()
     key_expires = time.time() + (30 * 86400)
-    
+
     access_key = AccessKey(
         key=key,
         duration_days=duration_days,
@@ -282,55 +295,55 @@ def create_access_key(duration_days: int = 0, duration_hours: int = 0, is_lifeti
         created_by=created_by,
         note=note
     )
-    
+
     KEYS[key] = access_key
     save_keys()
     return access_key
 
 def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
     key_string = key_string.strip().upper()
-    
+
     if key_string not in KEYS:
         return {"success": False, "message": "× Invalid key. Please check and try again."}
-    
+
     key = KEYS[key_string]
-    
+
     if key.revoked:
         return {"success": False, "message": "× This key has been revoked."}
-    
+
     if key.used_by is not None and key.used_by != user_id:
         return {"success": False, "message": "× This key has already been used by another user."}
-    
+
     if time.time() > key.expires_at:
         return {"success": False, "message": "× This key has expired."}
-    
+
     user = get_or_create_user(user_id)
-    
+
     if key.is_lifetime:
         access_duration = float('inf')
     else:
         access_duration = (key.duration_days * 86400) + (key.duration_hours * 3600)
-    
+
     current_time = time.time()
-    
+
     if user.access_expires > current_time and user.access_expires != float('inf'):
         user.access_expires += access_duration
     else:
         user.access_expires = current_time + access_duration if access_duration != float('inf') else float('inf')
-    
+
     key.used_by = user_id
     key.used_at = current_time
     user.current_key = key_string
     user.total_keys_used += 1
-    
+
     save_users()
     save_keys()
-    
+
     if key.is_lifetime:
         duration_msg = "LIFETIME ACCESS"
     else:
         duration_msg = f"{key.duration_days}D {key.duration_hours}H"
-    
+
     return {
         "success": True,
         "message": (
@@ -345,22 +358,22 @@ def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
 
 def revoke_key(key_string: str) -> Dict[str, Any]:
     key_string = key_string.strip().upper()
-    
+
     if key_string not in KEYS:
         return {"success": False, "message": "× Key not found."}
-    
+
     key = KEYS[key_string]
     key.revoked = True
-    
+
     if key.used_by is not None:
         user = USERS.get(key.used_by)
         if user:
             user.access_expires = 0
             user.current_key = ""
             save_users()
-    
+
     save_keys()
-    
+
     return {"success": True, "message": f"✓ Key {key_string} has been revoked."}
 
 # ============================================================
@@ -368,7 +381,6 @@ def revoke_key(key_string: str) -> Dict[str, Any]:
 # ============================================================
 
 async def generate_tempmail(session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
-    """Generate a temporary email account"""
     try:
         async with session.get(f"{TEMPMAIL_API}/tempmail/gen", timeout=30) as response:
             if response.status == 200:
@@ -380,7 +392,6 @@ async def generate_tempmail(session: aiohttp.ClientSession) -> Optional[Dict[str
         return None
 
 async def check_tempmail_inbox(session: aiohttp.ClientSession, token: str) -> Optional[Dict[str, Any]]:
-    """Check temporary email inbox"""
     try:
         async with session.get(
             f"{TEMPMAIL_API}/tempmail/inbox",
@@ -400,7 +411,6 @@ async def check_tempmail_inbox(session: aiohttp.ClientSession, token: str) -> Op
 # ============================================================
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    """Main menu keyboard"""
     if is_admin(user_id):
         rows = [
             ["▸ Boost Services", "▸ Temp Mail"],
@@ -418,7 +428,7 @@ def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             ["▸ Get Access", "▸ Help"],
             ["▸ My Statistics"]
         ]
-    
+
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def boost_category_keyboard() -> InlineKeyboardMarkup:
@@ -460,7 +470,6 @@ def facebook_services_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def tempmail_keyboard() -> InlineKeyboardMarkup:
-    """TempMail menu keyboard"""
     keyboard = [
         [InlineKeyboardButton("◈ Generate New Email", callback_data="tempmail:generate")],
         [InlineKeyboardButton("◈ Check Inbox", callback_data="tempmail:inbox")],
@@ -486,21 +495,42 @@ def key_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 # ============================================================
+# ERROR HANDLER (GLOBAL)
+# ============================================================
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors and prevent bot from crashing."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # Notify admin (optional)
+    try:
+        if isinstance(update, Update) and update.effective_user:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "⚠️ Bot Error\n"
+                    f"User: {update.effective_user.id}\n"
+                    f"Error: {type(context.error).__name__}: {context.error}"
+                ),
+            )
+    except Exception:
+        pass
+
+# ============================================================
 # HANDLERS
 # ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler"""
     user = update.effective_user
-    
+
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
         return
-    
+
     get_or_create_user(user.id, user.username or "", user.first_name or "")
-    
+
     access_status = get_access_status(user.id)
-    
+
     welcome_text = (
         "╔════════════════════════════╗\n"
         "║   CLOUT PREMIUM BOT        ║\n"
@@ -513,7 +543,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  ◈ Social Media Boosting\n"
         "  ◈ Temporary Email\n\n"
     )
-    
+
     if not has_access(user.id) and not is_admin(user.id):
         welcome_text += (
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -531,20 +561,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━━\n"
             "▸ Use menu buttons below to start!"
         )
-    
+
     await update.message.reply_text(
         welcome_text,
         reply_markup=main_keyboard(user.id)
     )
 
 async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show TempMail menu"""
     user = update.effective_user
-    
+
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
         return ConversationHandler.END
-    
+
+    # ✅ FIX: ensure user exists
+    get_or_create_user(user.id, user.username or "", user.first_name or "")
+
     if not has_access(user.id):
         await update.message.reply_text(
             "× You need access to use Temp Mail.\n\n"
@@ -553,11 +585,10 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(user.id)
         )
         return ConversationHandler.END
-    
-    # Check if user already has tempmail
+
     user_id_str = str(user.id)
     existing_mail = TEMPMAILS.get(user_id_str)
-    
+
     if existing_mail:
         message = (
             "╔════════════════════════════╗\n"
@@ -578,21 +609,20 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "▸ Check inbox for messages\n\n"
             "▸ Options :"
         )
-    
+
     await update.message.reply_text(
         message,
         reply_markup=tempmail_keyboard()
     )
-    
+
     return ConversationHandler.END
 
 async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle TempMail actions"""
     query = update.callback_query
     await query.answer()
-    
+
     data = query.data
-    
+
     if data == "main_menu":
         await query.edit_message_text("▸ Returning to main menu...")
         await context.bot.send_message(
@@ -601,16 +631,14 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=main_keyboard(query.from_user.id)
         )
         return ConversationHandler.END
-    
+
     if data == "tempmail:generate":
-        # Show loading
         await query.edit_message_text("▸ Generating temporary email...")
-        
+
         async with aiohttp.ClientSession() as session:
             result = await generate_tempmail(session)
-        
+
         if result and result.get("email"):
-            # Save tempmail
             user_id_str = str(query.from_user.id)
             tempmail = TempMailAccount(
                 email=result.get("email", ""),
@@ -622,7 +650,7 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
             )
             TEMPMAILS[user_id_str] = tempmail
             save_tempmails()
-            
+
             await query.edit_message_text(
                 "╔════════════════════════════╗\n"
                 "║   TEMP MAIL GENERATED      ║\n"
@@ -637,25 +665,25 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
                 "× Failed to generate email.\n"
                 "× Please try again later."
             )
-        
+
         return ConversationHandler.END
-    
+
     if data == "tempmail:inbox":
         user_id_str = str(query.from_user.id)
         existing_mail = TEMPMAILS.get(user_id_str)
-        
+
         if not existing_mail:
             await query.edit_message_text(
                 "× No email generated yet.\n"
                 "▸ Generate one first!"
             )
             return ConversationHandler.END
-        
+
         await query.edit_message_text("▸ Checking inbox...")
-        
+
         async with aiohttp.ClientSession() as session:
             result = await check_tempmail_inbox(session, existing_mail.token)
-        
+
         if result:
             if "error" in result:
                 await query.edit_message_text(
@@ -663,9 +691,8 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
                     "▸ Generate a new email."
                 )
             else:
-                # Format inbox messages
                 messages = result.get("hydra:member", result.get("messages", []))
-                
+
                 if not messages:
                     await query.edit_message_text(
                         "◈ INBOX EMPTY\n\n"
@@ -678,13 +705,13 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
                         "║      INBOX MESSAGES        ║\n"
                         "╚════════════════════════════╝\n\n"
                     )
-                    
-                    for msg in messages[:5]:  # Show max 5 messages
+
+                    for msg in messages[:5]:
                         sender = msg.get("from", {}).get("address", "Unknown")
                         subject = msg.get("subject", "No Subject")
                         date = msg.get("createdAt", "")
                         intro = msg.get("intro", "")
-                        
+
                         inbox_text += (
                             f"▸ From    : {sender}\n"
                             f"▸ Subject : {subject}\n"
@@ -692,30 +719,30 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
                             f"▸ Preview : {intro}\n"
                             "━━━━━━━━━━━━━━━━━━━━\n"
                         )
-                    
+
                     await query.edit_message_text(inbox_text)
         else:
             await query.edit_message_text(
                 "× Failed to check inbox.\n"
                 "× Please try again later."
             )
-        
+
         return ConversationHandler.END
-    
+
     return ConversationHandler.END
 
 async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show boost service categories"""
     user = update.effective_user
-    
+
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
         return ConversationHandler.END
-    
+
     if SETTINGS.maintenance_mode and not is_admin(user.id):
         await update.message.reply_text("× Bot is under maintenance. Try again later.")
         return ConversationHandler.END
-    
+
     if not has_access(user.id):
         await update.message.reply_text(
             "× You need access to use boost services.\n\n"
@@ -724,12 +751,14 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(user.id)
         )
         return ConversationHandler.END
-    
-    USERS[user.id].total_clicks += 1
+
+    # ✅ FIX: Ensure user exists BEFORE incrementing
+    user_obj = get_or_create_user(user.id, user.username or "", user.first_name or "")
+    user_obj.total_clicks += 1
     SETTINGS.total_clicks += 1
     save_users()
     save_settings()
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║    BOOST SERVICES          ║\n"
@@ -737,16 +766,15 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "▸ Select a platform :",
         reply_markup=boost_category_keyboard()
     )
-    
+
     return ConversationHandler.END
 
 async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle boost service selection"""
     query = update.callback_query
     await query.answer()
-    
+
     data = query.data
-    
+
     if data == "main_menu":
         await query.edit_message_text("▸ Returning to main menu...")
         await context.bot.send_message(
@@ -755,17 +783,17 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=main_keyboard(query.from_user.id)
         )
         return ConversationHandler.END
-    
+
     if data == "back_to_categories":
         await query.edit_message_text(
             "▸ Select a platform :",
             reply_markup=boost_category_keyboard()
         )
         return ConversationHandler.END
-    
+
     if data.startswith("category:"):
         category = data.split(":")[1]
-        
+
         if category == "tiktok":
             await query.edit_message_text(
                 "╔════════════════════════════╗\n"
@@ -790,13 +818,12 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
                 "▸ Click a service to boost :",
                 reply_markup=facebook_services_keyboard()
             )
-    
+
     return ConversationHandler.END
 
 async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Prompt for access key"""
     user = update.effective_user
-    
+
     if has_access(user.id):
         access_status = get_access_status(user.id)
         await update.message.reply_text(
@@ -804,9 +831,9 @@ async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"◈ Status : {access_status}"
         )
         return ConversationHandler.END
-    
+
     context.user_data['awaiting_key'] = True
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║     REDEEM ACCESS KEY      ║\n"
@@ -815,22 +842,21 @@ async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "▸ Format : CLOUT-XXXXXXXXXXXX\n\n"
         "Type /cancel to go back."
     )
-    
+
     return AWAITING_KEY
 
 async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle key redemption"""
     key_string = update.message.text.strip()
     context.user_data['awaiting_key'] = False
-    
+
     result = redeem_key(update.effective_user.id, key_string)
-    
+
     if result['success']:
         await update.message.reply_text(
             result['message'],
             reply_markup=main_keyboard(update.effective_user.id)
         )
-        
+
         user = update.effective_user
         if ADMIN_ID:
             try:
@@ -848,16 +874,15 @@ async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(result['message'])
         return AWAITING_KEY
-    
+
     return ConversationHandler.END
 
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user stats"""
     user_id = update.effective_user.id
     user = get_or_create_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
-    
+
     access_status = get_access_status(user_id)
-    
+
     stats_text = (
         "╔════════════════════════════╗\n"
         "║     YOUR STATISTICS        ║\n"
@@ -869,7 +894,7 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Total Clicks: {user.total_clicks}\n"
         f"▸ Joined     : {datetime.fromtimestamp(user.joined_at).strftime('%Y-%m-%d')}"
     )
-    
+
     await update.message.reply_text(stats_text)
 
 # ============================================================
@@ -877,11 +902,10 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show admin panel"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("× Admin only.")
         return
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║      ADMIN PANEL           ║\n"
@@ -891,10 +915,9 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate key from admin panel"""
     if not is_admin(update.effective_user.id):
         return
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║   GENERATE ACCESS KEY      ║\n"
@@ -904,22 +927,21 @@ async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle key generation callback"""
     query = update.callback_query
     await query.answer()
-    
+
     data = query.data
-    
+
     if data == "cancel":
         await query.edit_message_text("× Operation cancelled.")
         return ConversationHandler.END
-    
+
     if data.startswith("keytype:"):
         key_type = data.split(":")[1]
-        
+
         if key_type == "lifetime":
             key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
-            
+
             await query.edit_message_text(
                 "╔════════════════════════════╗\n"
                 "║    KEY CREATED SUCCESS     ║\n"
@@ -930,10 +952,10 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
                 "Send this key to your customer."
             )
             return ConversationHandler.END
-        
+
         elif key_type == "custom":
             context.user_data['awaiting_key_duration'] = True
-            
+
             await query.edit_message_text(
                 "╔════════════════════════════╗\n"
                 "║    CUSTOM KEY DURATION     ║\n"
@@ -947,19 +969,18 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
                 "Type /cancel to cancel."
             )
             return AWAITING_KEY_DURATION
-    
+
     return ConversationHandler.END
 
 async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle custom key duration"""
     text = update.message.text.strip()
     context.user_data['awaiting_key_duration'] = False
-    
+
     try:
         days_str, hours_str = text.split(',')
         days = int(days_str.strip())
         hours = int(hours_str.strip())
-        
+
         if days < 0 or hours < 0:
             raise ValueError("Negative values not allowed")
         if days == 0 and hours == 0:
@@ -968,7 +989,7 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
             raise ValueError("Days cannot exceed 365")
         if hours > 23:
             raise ValueError("Hours cannot exceed 23")
-        
+
     except ValueError as e:
         await update.message.reply_text(
             f"× Invalid input : {e}\n\n"
@@ -978,13 +999,13 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         context.user_data['awaiting_key_duration'] = True
         return AWAITING_KEY_DURATION
-    
+
     key = create_access_key(
         duration_days=days,
         duration_hours=hours,
         created_by=update.effective_user.id
     )
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║    KEY CREATED SUCCESS     ║\n"
@@ -994,26 +1015,25 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"▸ Status   : Available\n\n"
         "Send this key to your customer."
     )
-    
+
     return ConversationHandler.END
 
 async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all keys"""
     if not is_admin(update.effective_user.id):
         return
-    
+
     if not KEYS:
         await update.message.reply_text("× No keys generated yet.")
         return
-    
+
     keys_list = sorted(KEYS.values(), key=lambda x: x.created_at, reverse=True)[:20]
-    
+
     message = (
         "╔════════════════════════════╗\n"
         "║      RECENT KEYS           ║\n"
         "╚════════════════════════════╝\n\n"
     )
-    
+
     for key in keys_list:
         if key.revoked:
             status = "REVOKED"
@@ -1025,32 +1045,31 @@ async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status = "EXPIRED"
         else:
             status = "AVAILABLE"
-        
+
         if key.is_lifetime:
             duration = "LIFETIME"
         else:
             duration = f"{key.duration_days}D {key.duration_hours}H"
-        
+
         message += (
             f"▸ Key      : {key.key}\n"
             f"▸ Duration : {duration}\n"
             f"▸ Status   : {status}\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
         )
-    
+
     await update.message.reply_text(message)
 
 async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show global stats"""
     if not is_admin(update.effective_user.id):
         return
-    
+
     total_users = len(USERS)
     active_users = sum(1 for u in USERS.values() if has_access(u.user_id))
     total_keys = len(KEYS)
     used_keys = sum(1 for k in KEYS.values() if k.used_by)
     total_tempmails = len(TEMPMAILS)
-    
+
     stats_text = (
         "╔════════════════════════════╗\n"
         "║     GLOBAL STATISTICS      ║\n"
@@ -1063,16 +1082,15 @@ async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ TempMails     : {total_tempmails}\n"
         f"▸ Maintenance   : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
     )
-    
+
     await update.message.reply_text(stats_text)
 
 async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Revoke key from admin panel"""
     if not is_admin(update.effective_user.id):
         return
-    
+
     context.user_data['awaiting_revoke_key'] = True
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║      REVOKE KEY            ║\n"
@@ -1081,25 +1099,23 @@ async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "▸ Format : CLOUT-XXXXXXXXXXXX\n\n"
         "Type /cancel to cancel."
     )
-    
+
     return AWAITING_REVOKE_KEY
 
 async def handle_revoke_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle key revocation"""
     key_string = update.message.text.strip().upper()
     context.user_data['awaiting_revoke_key'] = False
-    
+
     result = revoke_key(key_string)
     await update.message.reply_text(result['message'])
     return ConversationHandler.END
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users"""
     if not is_admin(update.effective_user.id):
         return
-    
+
     context.user_data['awaiting_broadcast'] = True
-    
+
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║     BROADCAST MESSAGE      ║\n"
@@ -1107,21 +1123,20 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "▸ Send the message to broadcast :\n"
         "Type /cancel to cancel."
     )
-    
+
     return AWAITING_BROADCAST_MESSAGE
 
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle broadcast"""
     message = update.message.text
     context.user_data['awaiting_broadcast'] = False
-    
+
     success = 0
     failed = 0
-    
+
     status_msg = await update.message.reply_text(
         f"▸ Sending broadcast to {len(USERS)} users..."
     )
-    
+
     for user_id in USERS:
         try:
             await context.bot.send_message(chat_id=user_id, text=message)
@@ -1129,7 +1144,7 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.05)
         except:
             failed += 1
-    
+
     await status_msg.edit_text(
         "╔════════════════════════════╗\n"
         "║    BROADCAST COMPLETE      ║\n"
@@ -1137,22 +1152,20 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Success : {success}\n"
         f"▸ Failed  : {failed}"
     )
-    
+
     return ConversationHandler.END
 
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Toggle maintenance mode"""
     if not is_admin(update.effective_user.id):
         return
-    
+
     SETTINGS.maintenance_mode = not SETTINGS.maintenance_mode
     save_settings()
-    
+
     status = "ON" if SETTINGS.maintenance_mode else "OFF"
     await update.message.reply_text(f"▸ Maintenance mode : {status}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel current operation"""
     context.user_data.clear()
     await update.message.reply_text(
         "× Operation cancelled.",
@@ -1167,25 +1180,27 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle menu navigation and pending operations"""
     text = update.message.text.strip()
-    
-    # Check for pending operations first
+
+    # ✅ FIX: Ensure user is registered before anything else
+    user = update.effective_user
+    get_or_create_user(user.id, user.username or "", user.first_name or "")
+
     if context.user_data.get('awaiting_key'):
         await handle_key_input(update, context)
         return
-    
+
     if context.user_data.get('awaiting_key_duration'):
         await handle_key_duration(update, context)
         return
-    
+
     if context.user_data.get('awaiting_broadcast'):
         await handle_broadcast(update, context)
         return
-    
+
     if context.user_data.get('awaiting_revoke_key'):
         await handle_revoke_key(update, context)
         return
-    
-    # Regular menu navigation
+
     if text == "▸ Boost Services":
         await boost_services(update, context)
     elif text == "▸ Temp Mail":
@@ -1226,18 +1241,17 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 def main():
-    """Main function"""
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set!")
         return
-    
-    # Load state
+
     load_state()
-    
-    # Create application
+
     application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Conversation handlers
+
+    # ✅ FIX: Global error handler
+    application.add_error_handler(error_handler)
+
     key_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Get Access$'), get_access),
@@ -1248,7 +1262,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-    
+
     key_gen_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Generate Key$'), generate_key_admin),
@@ -1258,7 +1272,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-    
+
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Revoke Key$'), revoke_key_admin),
@@ -1270,8 +1284,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-    
-    # Add handlers
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
@@ -1279,18 +1292,16 @@ def main():
     application.add_handler(key_conv)
     application.add_handler(key_gen_conv)
     application.add_handler(admin_conv)
-    
-    # Callback handlers
+
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
     application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
-    
-    # Menu handler (should be last)
+
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
-    
+
     logger.info("Clout Premium Bot with TempMail started!")
     application.run_polling()
 
