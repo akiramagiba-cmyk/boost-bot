@@ -23,7 +23,6 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     CallbackQueryHandler,
-    ConversationHandler,
     filters,
 )
 
@@ -43,33 +42,8 @@ KEYS_FILE = STATE_DIR / "keys.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 TEMPMAIL_FILE = STATE_DIR / "tempmails.json"
 
-# Conversation states
-AWAITING_KEY = 1
-AWAITING_KEY_DURATION = 2
-AWAITING_BROADCAST_MESSAGE = 3
-AWAITING_REVOKE_KEY = 4
-AWAITING_TEMPMAIL_INBOX = 5
-
 # API Endpoints
 TEMPMAIL_API = "https://ceddsrestapi.vercel.app"
-
-# ============================================================
-# BOOST LINKS
-# ============================================================
-
-BOOST_SERVICES = {
-    "tiktok_views": {"name": "TikTok Views", "icon": "◉", "url": "https://zefame.com/en/free-tiktok-views"},
-    "tiktok_followers": {"name": "TikTok Followers", "icon": "◆", "url": "https://zefame.com/en/free-tiktok-followers"},
-    "tiktok_likes": {"name": "TikTok Likes", "icon": "♥", "url": "https://zefame.com/en/free-tiktok-likes"},
-    "tiktok_shares": {"name": "TikTok Shares", "icon": "↗", "url": "https://zefame.com/en/free-tiktok-shares"},
-    "tiktok_favorites": {"name": "TikTok Favorites", "icon": "★", "url": "https://zefame.com/en/free-tiktok-saves"},
-    "instagram_views": {"name": "Instagram Views", "icon": "◉", "url": "https://zefame.com/en/free-instagram-views"},
-    "instagram_followers": {"name": "Instagram Followers", "icon": "◆", "url": "https://zefame.com/en/free-instagram-followers"},
-    "instagram_story_views": {"name": "Instagram Story Views", "icon": "◈", "url": "https://zefame.com/en/free-instagram-story-views"},
-    "facebook_followers": {"name": "Facebook Followers", "icon": "◆", "url": "https://zefame.com/en/free-facebook-followers"},
-    "facebook_views": {"name": "Facebook Video Views", "icon": "◉", "url": "https://zefame.com/en/free-facebook-views"},
-    "facebook_post_likes": {"name": "Facebook Post Likes", "icon": "♥", "url": "https://zefame.com/en/free-facebook-post-likes"},
-}
 
 # ============================================================
 # DATA MODELS
@@ -499,7 +473,6 @@ def key_type_keyboard() -> InlineKeyboardMarkup:
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
-
     try:
         if isinstance(update, Update) and update.effective_user:
             await context.bot.send_message(
@@ -525,6 +498,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     get_or_create_user(user.id, user.username or "", user.first_name or "")
+    context.user_data.clear()
 
     access_status = get_access_status(user.id)
 
@@ -580,9 +554,10 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
-        return ConversationHandler.END
+        return
 
     get_or_create_user(user.id, user.username or "", user.first_name or "")
+    context.user_data.clear()
 
     if not has_access(user.id):
         await update.message.reply_text(
@@ -591,7 +566,7 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "▸ Use '▸ Get Access' to redeem!",
             reply_markup=main_keyboard(user.id)
         )
-        return ConversationHandler.END
+        return
 
     user_id_str = str(user.id)
     existing_mail = TEMPMAILS.get(user_id_str)
@@ -622,132 +597,187 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=tempmail_keyboard()
     )
 
-    return ConversationHandler.END
-
 async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle TempMail inline button actions — WRAPPED IN TRY/EXCEPT"""
     query = update.callback_query
+    logger.info(f"🔔 TEMPMAIL CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
 
     data = query.data
 
-    if data == "main_menu":
-        await query.edit_message_text("▸ Returning to main menu...")
-        await context.bot.send_message(
-            query.message.chat_id,
-            "▸ Main Menu :",
-            reply_markup=main_keyboard(query.from_user.id)
-        )
-        return ConversationHandler.END
-
-    if data == "tempmail:generate":
-        await query.edit_message_text("▸ Generating temporary email...")
-
-        async with aiohttp.ClientSession() as session:
-            result = await generate_tempmail(session)
-
-        if result and result.get("email"):
-            user_id_str = str(query.from_user.id)
-            tempmail = TempMailAccount(
-                email=result.get("email", ""),
-                password=result.get("password", ""),
-                token=result.get("token", ""),
-                account_id=result.get("id", ""),
-                created_at=time.time(),
-                user_id=query.from_user.id
-            )
-            TEMPMAILS[user_id_str] = tempmail
-            save_tempmails()
-
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║   TEMP MAIL GENERATED      ║\n"
-                "╚════════════════════════════╝\n\n"
-                f"▸ Email    : {tempmail.email}\n"
-                f"▸ Password : {tempmail.password}\n\n"
-                "▸ Save these details!\n"
-                "▸ Use 'Check Inbox' to see messages."
-            )
-        else:
-            await query.edit_message_text(
-                "× Failed to generate email.\n"
-                "× Please try again later."
-            )
-
-        return ConversationHandler.END
-
-    if data == "tempmail:inbox":
-        user_id_str = str(query.from_user.id)
-        existing_mail = TEMPMAILS.get(user_id_str)
-
-        if not existing_mail:
-            await query.edit_message_text(
-                "× No email generated yet.\n"
-                "▸ Generate one first!"
-            )
-            return ConversationHandler.END
-
-        await query.edit_message_text("▸ Checking inbox...")
-
-        async with aiohttp.ClientSession() as session:
-            result = await check_tempmail_inbox(session, existing_mail.token)
-
-        if result:
-            if "error" in result:
+    try:
+        # ---- MAIN MENU ----
+        if data == "main_menu":
+            try:
                 await query.edit_message_text(
-                    "× Token expired or invalid.\n"
-                    "▸ Generate a new email."
+                    "▸ Main Menu :",
+                    reply_markup=main_keyboard(query.from_user.id)
                 )
-            else:
-                messages = result.get("hydra:member", result.get("messages", []))
+            except Exception as e:
+                logger.error(f"❌ MAIN MENU EDIT ERROR: {e}")
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="▸ Main Menu :",
+                    reply_markup=main_keyboard(query.from_user.id)
+                )
+            return
 
-                if not messages:
+        # ---- GENERATE NEW EMAIL ----
+        if data == "tempmail:generate":
+            try:
+                await query.edit_message_text("▸ Generating temporary email...")
+            except Exception as e:
+                logger.error(f"❌ Edit loading error: {e}")
+
+            async with aiohttp.ClientSession() as session:
+                result = await generate_tempmail(session)
+
+            if result and result.get("email"):
+                user_id_str = str(query.from_user.id)
+                tempmail = TempMailAccount(
+                    email=result.get("email", ""),
+                    password=result.get("password", ""),
+                    token=result.get("token", ""),
+                    account_id=result.get("id", ""),
+                    created_at=time.time(),
+                    user_id=query.from_user.id
+                )
+                TEMPMAILS[user_id_str] = tempmail
+                save_tempmails()
+                logger.info(f"✅ TEMPMAIL GENERATED: {tempmail.email}")
+
+                try:
                     await query.edit_message_text(
-                        "◈ INBOX EMPTY\n\n"
-                        f"▸ Email : {existing_mail.email}\n"
-                        "▸ No messages received yet."
-                    )
-                else:
-                    inbox_text = (
                         "╔════════════════════════════╗\n"
-                        "║      INBOX MESSAGES        ║\n"
+                        "║   TEMP MAIL GENERATED      ║\n"
                         "╚════════════════════════════╝\n\n"
+                        f"▸ Email    : {tempmail.email}\n"
+                        f"▸ Password : {tempmail.password}\n\n"
+                        "▸ Save these details!\n"
+                        "▸ Use 'Check Inbox' to see messages."
                     )
+                except Exception as e:
+                    logger.error(f"❌ Edit result error: {e}")
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=(
+                            "╔════════════════════════════╗\n"
+                            "║   TEMP MAIL GENERATED      ║\n"
+                            "╚════════════════════════════╝\n\n"
+                            f"▸ Email    : {tempmail.email}\n"
+                            f"▸ Password : {tempmail.password}"
+                        )
+                    )
+            else:
+                try:
+                    await query.edit_message_text(
+                        "× Failed to generate email.\n"
+                        "× Please try again later."
+                    )
+                except Exception as e:
+                    logger.error(f"❌ Edit fail error: {e}")
+            return
 
-                    for msg in messages[:5]:
-                        sender = msg.get("from", {}).get("address", "Unknown")
-                        subject = msg.get("subject", "No Subject")
-                        date = msg.get("createdAt", "")
-                        intro = msg.get("intro", "")
+        # ---- CHECK INBOX ----
+        if data == "tempmail:inbox":
+            user_id_str = str(query.from_user.id)
+            existing_mail = TEMPMAILS.get(user_id_str)
 
-                        inbox_text += (
-                            f"▸ From    : {sender}\n"
-                            f"▸ Subject : {subject}\n"
-                            f"▸ Date    : {date}\n"
-                            f"▸ Preview : {intro}\n"
-                            "━━━━━━━━━━━━━━━━━━━━\n"
+            if not existing_mail:
+                try:
+                    await query.edit_message_text(
+                        "× No email generated yet.\n"
+                        "▸ Generate one first!"
+                    )
+                except Exception as e:
+                    logger.error(f"❌ Edit no-mail error: {e}")
+                return
+
+            try:
+                await query.edit_message_text("▸ Checking inbox...")
+            except Exception as e:
+                logger.error(f"❌ Edit loading inbox error: {e}")
+
+            async with aiohttp.ClientSession() as session:
+                result = await check_tempmail_inbox(session, existing_mail.token)
+
+            if result:
+                if "error" in result:
+                    try:
+                        await query.edit_message_text(
+                            "× Token expired or invalid.\n"
+                            "▸ Generate a new email."
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Edit token error: {e}")
+                else:
+                    messages = result.get("hydra:member", result.get("messages", []))
+
+                    if not messages:
+                        try:
+                            await query.edit_message_text(
+                                "◈ INBOX EMPTY\n\n"
+                                f"▸ Email : {existing_mail.email}\n"
+                                "▸ No messages received yet."
+                            )
+                        except Exception as e:
+                            logger.error(f"❌ Edit empty error: {e}")
+                    else:
+                        inbox_text = (
+                            "╔════════════════════════════╗\n"
+                            "║      INBOX MESSAGES        ║\n"
+                            "╚════════════════════════════╝\n\n"
                         )
 
-                    await query.edit_message_text(inbox_text)
-        else:
-            await query.edit_message_text(
-                "× Failed to check inbox.\n"
-                "× Please try again later."
-            )
+                        for msg in messages[:5]:
+                            sender = msg.get("from", {}).get("address", "Unknown")
+                            subject = msg.get("subject", "No Subject")
+                            date = msg.get("createdAt", "")
+                            intro = msg.get("intro", "")
 
-        return ConversationHandler.END
+                            inbox_text += (
+                                f"▸ From    : {sender}\n"
+                                f"▸ Subject : {subject}\n"
+                                f"▸ Date    : {date}\n"
+                                f"▸ Preview : {intro}\n"
+                                "━━━━━━━━━━━━━━━━━━━━\n"
+                            )
 
-    return ConversationHandler.END
+                        try:
+                            await query.edit_message_text(inbox_text)
+                        except Exception as e:
+                            logger.error(f"❌ Edit inbox error: {e}")
+                            await context.bot.send_message(
+                                chat_id=query.message.chat_id,
+                                text=inbox_text
+                            )
+            else:
+                try:
+                    await query.edit_message_text(
+                        "× Failed to check inbox.\n"
+                        "× Please try again later."
+                    )
+                except Exception as e:
+                    logger.error(f"❌ Edit inbox fail error: {e}")
+            return
+
+    except Exception as e:
+        logger.error(f"❌ TEMPMAIL OUTER ERROR: {type(e).__name__}: {e}")
+        try:
+            await query.edit_message_text(f"× Error: {e}")
+        except:
+            pass
 
 async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
-        return ConversationHandler.END
+        return
 
     if SETTINGS.maintenance_mode and not is_admin(user.id):
         await update.message.reply_text("× Bot is under maintenance. Try again later.")
-        return ConversationHandler.END
+        return
 
     if not has_access(user.id):
         await update.message.reply_text(
@@ -756,13 +786,15 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "▸ Use '▸ Get Access' to redeem!",
             reply_markup=main_keyboard(user.id)
         )
-        return ConversationHandler.END
+        return
 
     user_obj = get_or_create_user(user.id, user.username or "", user.first_name or "")
     user_obj.total_clicks += 1
     SETTINGS.total_clicks += 1
     save_users()
     save_settings()
+
+    context.user_data.clear()
 
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
@@ -772,59 +804,98 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=boost_category_keyboard()
     )
 
-    return ConversationHandler.END
-
 async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Boost inline button actions — WRAPPED IN TRY/EXCEPT"""
     query = update.callback_query
+    logger.info(f"🔔 BOOST CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
 
     data = query.data
 
-    if data == "main_menu":
-        await query.edit_message_text("▸ Returning to main menu...")
-        await context.bot.send_message(
-            query.message.chat_id,
-            "▸ Main Menu :",
-            reply_markup=main_keyboard(query.from_user.id)
-        )
-        return ConversationHandler.END
+    try:
+        # ---- MAIN MENU ----
+        if data == "main_menu":
+            try:
+                await query.edit_message_text(
+                    "▸ Main Menu :",
+                    reply_markup=main_keyboard(query.from_user.id)
+                )
+            except Exception as e:
+                logger.error(f"❌ Edit main menu error: {e}")
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="▸ Main Menu :",
+                    reply_markup=main_keyboard(query.from_user.id)
+                )
+            return
 
-    if data == "back_to_categories":
-        await query.edit_message_text(
-            "▸ Select a platform :",
-            reply_markup=boost_category_keyboard()
-        )
-        return ConversationHandler.END
+        # ---- BACK TO CATEGORIES ----
+        if data == "back_to_categories":
+            try:
+                await query.edit_message_text(
+                    "╔════════════════════════════╗\n"
+                    "║    BOOST SERVICES          ║\n"
+                    "╚════════════════════════════╝\n\n"
+                    "▸ Select a platform :",
+                    reply_markup=boost_category_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"❌ Edit back error: {e}")
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="▸ Select a platform :",
+                    reply_markup=boost_category_keyboard()
+                )
+            return
 
-    if data.startswith("category:"):
-        category = data.split(":")[1]
+        # ---- CATEGORY ----
+        if data.startswith("category:"):
+            category = data.split(":")[1]
 
-        if category == "tiktok":
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║    TIKTOK SERVICES         ║\n"
-                "╚════════════════════════════╝\n\n"
-                "▸ Click a service to boost :",
-                reply_markup=tiktok_services_keyboard()
-            )
-        elif category == "instagram":
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║   INSTAGRAM SERVICES       ║\n"
-                "╚════════════════════════════╝\n\n"
-                "▸ Click a service to boost :",
-                reply_markup=instagram_services_keyboard()
-            )
-        elif category == "facebook":
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║    FACEBOOK SERVICES       ║\n"
-                "╚════════════════════════════╝\n\n"
-                "▸ Click a service to boost :",
-                reply_markup=facebook_services_keyboard()
-            )
+            if category == "tiktok":
+                text = (
+                    "╔════════════════════════════╗\n"
+                    "║    TIKTOK SERVICES         ║\n"
+                    "╚════════════════════════════╝\n\n"
+                    "▸ Click a service to boost :"
+                )
+                kb = tiktok_services_keyboard()
+            elif category == "instagram":
+                text = (
+                    "╔════════════════════════════╗\n"
+                    "║   INSTAGRAM SERVICES       ║\n"
+                    "╚════════════════════════════╝\n\n"
+                    "▸ Click a service to boost :"
+                )
+                kb = instagram_services_keyboard()
+            elif category == "facebook":
+                text = (
+                    "╔════════════════════════════╗\n"
+                    "║    FACEBOOK SERVICES       ║\n"
+                    "╚════════════════════════════╝\n\n"
+                    "▸ Click a service to boost :"
+                )
+                kb = facebook_services_keyboard()
+            else:
+                return
 
-    return ConversationHandler.END
+            try:
+                await query.edit_message_text(text, reply_markup=kb)
+            except Exception as e:
+                logger.error(f"❌ Edit category error: {e}")
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=text,
+                    reply_markup=kb
+                )
+            return
+
+    except Exception as e:
+        logger.error(f"❌ BOOST OUTER ERROR: {type(e).__name__}: {e}")
+        try:
+            await query.edit_message_text(f"× Error: {e}")
+        except:
+            pass
 
 async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -835,9 +906,10 @@ async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✓ You already have access!\n\n"
             f"◈ Status : {access_status}"
         )
-        return ConversationHandler.END
+        return
 
-    context.user_data['awaiting_key'] = True
+    context.user_data.clear()
+    context.user_data['awaiting'] = 'key'
 
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
@@ -848,11 +920,9 @@ async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Type /cancel to go back."
     )
 
-    return AWAITING_KEY
-
 async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_string = update.message.text.strip()
-    context.user_data['awaiting_key'] = False
+    context.user_data.pop('awaiting', None)
 
     result = redeem_key(update.effective_user.id, key_string)
 
@@ -871,16 +941,13 @@ async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"▸ User : {user.first_name}\n"
                     f"▸ ID   : {user.id}\n"
-                    f"▸ Key  : {key_string}",
-                    parse_mode="Markdown"
+                    f"▸ Key  : {key_string}"
                 )
             except:
                 pass
     else:
         await update.message.reply_text(result['message'])
-        return AWAITING_KEY
-
-    return ConversationHandler.END
+        context.user_data['awaiting'] = 'key'
 
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -911,6 +978,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("× Admin only.")
         return
 
+    context.user_data.clear()
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║      ADMIN PANEL           ║\n"
@@ -924,6 +992,7 @@ async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("× Admin only.")
         return
 
+    context.user_data.clear()
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
         "║   GENERATE ACCESS KEY      ║\n"
@@ -933,61 +1002,66 @@ async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle key type selection from inline buttons"""
+    """Handle key type selection"""
     query = update.callback_query
-
-    # ✅ DEBUG LOG — makikita natin sa Railway logs kung umaabot ang callback
-    logger.info(f"🔔 CALLBACK RECEIVED: {query.data} from user {query.from_user.id}")
-
+    logger.info(f"🔔 KEYGEN CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
 
     data = query.data
 
-    if data == "cancel":
-        await query.edit_message_text("× Operation cancelled.")
-        return ConversationHandler.END
+    try:
+        if data == "cancel":
+            context.user_data.clear()
+            await query.edit_message_text("× Operation cancelled.")
+            return
 
-    if data.startswith("keytype:"):
-        key_type = data.split(":")[1]
+        if data.startswith("keytype:"):
+            key_type = data.split(":")[1]
 
-        if key_type == "lifetime":
-            key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
-            logger.info(f"✅ LIFETIME KEY CREATED: {key.key}")
+            if key_type == "lifetime":
+                key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
+                logger.info(f"✅ LIFETIME KEY CREATED: {key.key}")
 
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║    KEY CREATED SUCCESS     ║\n"
-                "╚════════════════════════════╝\n\n"
-                f"▸ Key      : {key.key}\n"
-                f"▸ Duration : LIFETIME\n"
-                f"▸ Status   : Available\n\n"
-                "Send this key to your customer."
-            )
-            return ConversationHandler.END
+                await query.edit_message_text(
+                    "╔════════════════════════════╗\n"
+                    "║    KEY CREATED SUCCESS     ║\n"
+                    "╚════════════════════════════╝\n\n"
+                    f"▸ Key      : {key.key}\n"
+                    f"▸ Duration : LIFETIME\n"
+                    f"▸ Status   : Available\n\n"
+                    "Send this key to your customer."
+                )
+                context.user_data.clear()
+                return
 
-        elif key_type == "custom":
-            context.user_data['awaiting_key_duration'] = True
-            logger.info(f"📝 Awaiting custom duration from user {query.from_user.id}")
+            elif key_type == "custom":
+                context.user_data['awaiting'] = 'key_duration'
+                logger.info(f"📝 Awaiting custom duration from {query.from_user.id}")
 
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║    CUSTOM KEY DURATION     ║\n"
-                "╚════════════════════════════╝\n\n"
-                "▸ Enter duration in format :\n"
-                "▸ days,hours\n\n"
-                "Examples :\n"
-                "  ◈ 3,0   = 3 days\n"
-                "  ◈ 0,12  = 12 hours\n"
-                "  ◈ 7,12  = 7 days 12 hours\n\n"
-                "Type /cancel to cancel."
-            )
-            return AWAITING_KEY_DURATION
+                await query.edit_message_text(
+                    "╔════════════════════════════╗\n"
+                    "║    CUSTOM KEY DURATION     ║\n"
+                    "╚════════════════════════════╝\n\n"
+                    "▸ Enter duration in format :\n"
+                    "▸ days,hours\n\n"
+                    "Examples :\n"
+                    "  ◈ 3,0   = 3 days\n"
+                    "  ◈ 0,12  = 12 hours\n"
+                    "  ◈ 7,12  = 7 days 12 hours\n\n"
+                    "Type /cancel to cancel."
+                )
+                return
 
-    return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"❌ KEYGEN ERROR: {type(e).__name__}: {e}")
+        try:
+            await query.edit_message_text(f"× Error: {e}")
+        except:
+            pass
 
 async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    context.user_data['awaiting_key_duration'] = False
+    context.user_data.pop('awaiting', None)
 
     try:
         days_str, hours_str = text.split(',')
@@ -1010,8 +1084,8 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"▸ Example : 3,0 for 3 days\n\n"
             "Type /cancel to cancel."
         )
-        context.user_data['awaiting_key_duration'] = True
-        return AWAITING_KEY_DURATION
+        context.user_data['awaiting'] = 'key_duration'
+        return
 
     key = create_access_key(
         duration_days=days,
@@ -1029,8 +1103,6 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"▸ Status   : Available\n\n"
         "Send this key to your customer."
     )
-
-    return ConversationHandler.END
 
 async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -1103,7 +1175,8 @@ async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    context.user_data['awaiting_revoke_key'] = True
+    context.user_data.clear()
+    context.user_data['awaiting'] = 'revoke_key'
 
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
@@ -1114,21 +1187,19 @@ async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Type /cancel to cancel."
     )
 
-    return AWAITING_REVOKE_KEY
-
 async def handle_revoke_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_string = update.message.text.strip().upper()
-    context.user_data['awaiting_revoke_key'] = False
+    context.user_data.pop('awaiting', None)
 
     result = revoke_key(key_string)
     await update.message.reply_text(result['message'])
-    return ConversationHandler.END
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    context.user_data['awaiting_broadcast'] = True
+    context.user_data.clear()
+    context.user_data['awaiting'] = 'broadcast'
 
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
@@ -1138,11 +1209,9 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Type /cancel to cancel."
     )
 
-    return AWAITING_BROADCAST_MESSAGE
-
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
-    context.user_data['awaiting_broadcast'] = False
+    context.user_data.pop('awaiting', None)
 
     success = 0
     failed = 0
@@ -1167,8 +1236,6 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Failed  : {failed}"
     )
 
-    return ConversationHandler.END
-
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -1185,7 +1252,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "× Operation cancelled.",
         reply_markup=main_keyboard(update.effective_user.id)
     )
-    return ConversationHandler.END
 
 # ============================================================
 # MESSAGE HANDLER
@@ -1198,19 +1264,21 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     get_or_create_user(user.id, user.username or "", user.first_name or "")
 
-    if context.user_data.get('awaiting_key'):
+    awaiting = context.user_data.get('awaiting')
+
+    if awaiting == 'key':
         await handle_key_input(update, context)
         return
 
-    if context.user_data.get('awaiting_key_duration'):
+    if awaiting == 'key_duration':
         await handle_key_duration(update, context)
         return
 
-    if context.user_data.get('awaiting_broadcast'):
+    if awaiting == 'broadcast':
         await handle_broadcast(update, context)
         return
 
-    if context.user_data.get('awaiting_revoke_key'):
+    if awaiting == 'revoke_key':
         await handle_revoke_key(update, context)
         return
 
@@ -1266,63 +1334,14 @@ def main():
     application.add_error_handler(error_handler)
 
     # =========================================================
-    # STANDALONE CALLBACK HANDLERS — UNAHIN PARA SIGURADONG MAHULI
+    # CALLBACK HANDLERS (LAHAT NG INLINE BUTTONS)
     # =========================================================
-
-    # Key generation callbacks (ito ang FIX!)
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
-
-    # Boost callbacks
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
-
-    # Tempmail callbacks
     application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
-
-    # =========================================================
-    # CONVERSATIONS
-    # =========================================================
-
-    # ----- Conversation: Redeem Key -----
-    key_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^▸ Get Access$'), get_access),
-            MessageHandler(filters.Regex(r'^▸ Redeem Key$'), get_access),
-        ],
-        states={
-            AWAITING_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_key_input)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # ----- Conversation: Generate Key -----
-    key_gen_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^▸ Generate Key$'), generate_key_admin),
-            CommandHandler("genkey", generate_key_admin),
-        ],
-        states={
-            AWAITING_KEY_DURATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_key_duration),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # ----- Conversation: Admin (revoke/broadcast) -----
-    admin_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^▸ Revoke Key$'), revoke_key_admin),
-            MessageHandler(filters.Regex(r'^▸ Broadcast$'), broadcast),
-        ],
-        states={
-            AWAITING_REVOKE_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_revoke_key)],
-            AWAITING_BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
 
     # =========================================================
     # COMMANDS
@@ -1332,13 +1351,8 @@ def main():
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("tempmail", tempmail_menu))
     application.add_handler(CommandHandler("whoami", whoami))
-
-    # =========================================================
-    # CONVERSATIONS (IDAGDAG PAGKATAPOS NG CALLBACKS)
-    # =========================================================
-    application.add_handler(key_conv)
-    application.add_handler(key_gen_conv)
-    application.add_handler(admin_conv)
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("genkey", generate_key_admin))
 
     # =========================================================
     # MESSAGE HANDLER (LAST)
