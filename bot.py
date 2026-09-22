@@ -180,7 +180,6 @@ def load_state():
         except Exception as e:
             logger.error(f"Failed to load tempmails: {e}")
 
-    # Auto-register admin kung wala pa sa USERS
     if ADMIN_ID and ADMIN_ID not in USERS:
         USERS[ADMIN_ID] = User(
             user_id=ADMIN_ID,
@@ -499,7 +498,6 @@ def key_type_keyboard() -> InlineKeyboardMarkup:
 # ============================================================
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log errors and prevent bot from crashing."""
     logger.error("Exception while handling an update:", exc_info=context.error)
 
     try:
@@ -567,7 +565,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show your Telegram ID and admin status"""
     user = update.effective_user
     await update.message.reply_text(
         f"▸ Your ID      : {user.id}\n"
@@ -936,7 +933,12 @@ async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle key type selection from inline buttons"""
     query = update.callback_query
+
+    # ✅ DEBUG LOG — makikita natin sa Railway logs kung umaabot ang callback
+    logger.info(f"🔔 CALLBACK RECEIVED: {query.data} from user {query.from_user.id}")
+
     await query.answer()
 
     data = query.data
@@ -950,6 +952,7 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
 
         if key_type == "lifetime":
             key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
+            logger.info(f"✅ LIFETIME KEY CREATED: {key.key}")
 
             await query.edit_message_text(
                 "╔════════════════════════════╗\n"
@@ -964,6 +967,7 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
 
         elif key_type == "custom":
             context.user_data['awaiting_key_duration'] = True
+            logger.info(f"📝 Awaiting custom duration from user {query.from_user.id}")
 
             await query.edit_message_text(
                 "╔════════════════════════════╗\n"
@@ -1014,6 +1018,7 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
         duration_hours=hours,
         created_by=update.effective_user.id
     )
+    logger.info(f"✅ CUSTOM KEY CREATED: {key.key} ({days}D {hours}H)")
 
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
@@ -1260,6 +1265,26 @@ def main():
     # Global error handler
     application.add_error_handler(error_handler)
 
+    # =========================================================
+    # STANDALONE CALLBACK HANDLERS — UNAHIN PARA SIGURADONG MAHULI
+    # =========================================================
+
+    # Key generation callbacks (ito ang FIX!)
+    application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
+    application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
+
+    # Boost callbacks
+    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
+    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
+    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
+
+    # Tempmail callbacks
+    application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
+
+    # =========================================================
+    # CONVERSATIONS
+    # =========================================================
+
     # ----- Conversation: Redeem Key -----
     key_conv = ConversationHandler(
         entry_points=[
@@ -1272,7 +1297,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # ----- Conversation: Generate Key (FIXED!) -----
+    # ----- Conversation: Generate Key -----
     key_gen_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^▸ Generate Key$'), generate_key_admin),
@@ -1281,14 +1306,9 @@ def main():
         states={
             AWAITING_KEY_DURATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_key_duration),
-                CallbackQueryHandler(handle_key_generation, pattern="^keytype:"),
             ],
         },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(handle_key_generation, pattern="^keytype:"),
-            CallbackQueryHandler(handle_key_generation, pattern="^cancel$"),
-        ],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     # ----- Conversation: Admin (revoke/broadcast) -----
@@ -1304,31 +1324,25 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # ----- Commands -----
+    # =========================================================
+    # COMMANDS
+    # =========================================================
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("tempmail", tempmail_menu))
     application.add_handler(CommandHandler("whoami", whoami))
 
-    # ----- Conversations -----
+    # =========================================================
+    # CONVERSATIONS (IDAGDAG PAGKATAPOS NG CALLBACKS)
+    # =========================================================
     application.add_handler(key_conv)
     application.add_handler(key_gen_conv)
     application.add_handler(admin_conv)
 
-    # ----- Callback Handlers (BOOST) -----
-    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
-    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
-    application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
-
-    # ----- Callback Handlers (KEY GEN) -----
-    application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
-    application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
-
-    # ----- Callback Handlers (TEMPMAIL) -----
-    application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
-
-    # ----- Message Handler (LAST) -----
+    # =========================================================
+    # MESSAGE HANDLER (LAST)
+    # =========================================================
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     logger.info("Clout Premium Bot with TempMail started!")
