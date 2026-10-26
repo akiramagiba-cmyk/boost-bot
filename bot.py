@@ -34,8 +34,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8628435205:AAGjeWiQduB6c2S6YSW7BXEQP1bP2VedM
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5728569894"))
 ADMIN_IDS = {ADMIN_ID}
 
+# Binago ko ito ng konti para gumana sa Render Free (gumamit ng /tmp kung walang /app/data)
 STATE_DIR = Path("/app/data")
-STATE_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+except PermissionError:
+    STATE_DIR = Path("/tmp/data")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 USERS_FILE = STATE_DIR / "users.json"
 KEYS_FILE = STATE_DIR / "keys.json"
@@ -598,7 +603,6 @@ async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle TempMail inline button actions — WRAPPED IN TRY/EXCEPT"""
     query = update.callback_query
     logger.info(f"🔔 TEMPMAIL CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
@@ -606,7 +610,6 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
 
     try:
-        # ---- MAIN MENU ----
         if data == "main_menu":
             try:
                 await query.edit_message_text(
@@ -622,7 +625,6 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
                 )
             return
 
-        # ---- GENERATE NEW EMAIL ----
         if data == "tempmail:generate":
             try:
                 await query.edit_message_text("▸ Generating temporary email...")
@@ -678,7 +680,6 @@ async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_
                     logger.error(f"❌ Edit fail error: {e}")
             return
 
-        # ---- CHECK INBOX ----
         if data == "tempmail:inbox":
             user_id_str = str(query.from_user.id)
             existing_mail = TEMPMAILS.get(user_id_str)
@@ -805,7 +806,6 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle Boost inline button actions — WRAPPED IN TRY/EXCEPT"""
     query = update.callback_query
     logger.info(f"🔔 BOOST CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
@@ -813,7 +813,6 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
 
     try:
-        # ---- MAIN MENU ----
         if data == "main_menu":
             try:
                 await query.edit_message_text(
@@ -829,7 +828,6 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
                 )
             return
 
-        # ---- BACK TO CATEGORIES ----
         if data == "back_to_categories":
             try:
                 await query.edit_message_text(
@@ -848,7 +846,6 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
                 )
             return
 
-        # ---- CATEGORY ----
         if data.startswith("category:"):
             category = data.split(":")[1]
 
@@ -1002,7 +999,6 @@ async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle key type selection"""
     query = update.callback_query
     logger.info(f"🔔 KEYGEN CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
@@ -1258,7 +1254,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle menu navigation and pending operations"""
     text = update.message.text.strip()
 
     user = update.effective_user
@@ -1330,12 +1325,8 @@ def main():
 
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Global error handler
     application.add_error_handler(error_handler)
 
-    # =========================================================
-    # CALLBACK HANDLERS (LAHAT NG INLINE BUTTONS)
-    # =========================================================
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^cancel$"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
@@ -1343,9 +1334,6 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
 
-    # =========================================================
-    # COMMANDS
-    # =========================================================
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
@@ -1354,14 +1342,10 @@ def main():
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("genkey", generate_key_admin))
 
-    # =========================================================
-    # MESSAGE HANDLER (LAST)
-    # =========================================================
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     logger.info("Clout Premium Bot with TempMail started!")
     application.run_polling()
-
 
 if __name__ == "__main__":
     main()
