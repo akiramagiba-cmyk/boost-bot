@@ -1323,6 +1323,13 @@ def main():
 
     load_state()
 
+    # I-SETUP ANG EVENT LOOP PARA SA BACKGROUND THREAD (FIX SA RENDER)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_error_handler(error_handler)
