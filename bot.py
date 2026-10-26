@@ -1323,7 +1323,7 @@ def main():
 
     load_state()
 
-    # I-SETUP ANG EVENT LOOP PARA SA BACKGROUND THREAD (FIX SA RENDER)
+    # I-setup ang event loop para sa background thread
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
@@ -1352,7 +1352,9 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     logger.info("Clout Premium Bot with TempMail started!")
-    application.run_polling()
+    
+    # Idinagdag ang stop_signals=None para hindi mag-crash sa background thread ng Render
+    application.run_polling(stop_signals=None)
 
 if __name__ == "__main__":
     main()
