@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from urllib.parse import quote
 
 import aiohttp
 from telegram import (
@@ -34,7 +35,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8628435205:AAGjeWiQduB6c2S6YSW7BXEQP1bP2VedM
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5728569894"))
 ADMIN_IDS = {ADMIN_ID}
 
-# Binago ko ito ng konti para gumana sa Render Free (gumamit ng /tmp kung walang /app/data)
 STATE_DIR = Path("/app/data")
 try:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,10 +45,10 @@ except PermissionError:
 USERS_FILE = STATE_DIR / "users.json"
 KEYS_FILE = STATE_DIR / "keys.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
-TEMPMAIL_FILE = STATE_DIR / "tempmails.json"
 
-# API Endpoints
-TEMPMAIL_API = "https://ceddsrestapi.vercel.app"
+TIKTOK_API = "https://ceddsrestapi.vercel.app/downloader/tikdl"
+FB_REPORT_URL = "https://mbasic.facebook.com/help/contact/209046679279097"
+FB_SUBMIT_URL = "https://mbasic.facebook.com/a/help/contact_us/"
 
 # ============================================================
 # DATA MODELS
@@ -86,15 +86,6 @@ class BotSettings:
     total_clicks: int = 0
     key_required: bool = True
 
-@dataclass
-class TempMailAccount:
-    email: str
-    password: str
-    token: str
-    account_id: str
-    created_at: float = 0.0
-    user_id: int = 0
-
 # ============================================================
 # GLOBAL STATE
 # ============================================================
@@ -102,7 +93,6 @@ class TempMailAccount:
 USERS: Dict[int, User] = {}
 KEYS: Dict[str, AccessKey] = {}
 SETTINGS = BotSettings()
-TEMPMAILS: Dict[str, TempMailAccount] = {}
 
 # ============================================================
 # LOGGING
@@ -119,7 +109,7 @@ logger = logging.getLogger("clout-boost-bot")
 # ============================================================
 
 def load_state():
-    global USERS, KEYS, SETTINGS, TEMPMAILS
+    global USERS, KEYS, SETTINGS
 
     if USERS_FILE.exists():
         try:
@@ -148,16 +138,6 @@ def load_state():
                 SETTINGS = BotSettings(**data)
         except Exception as e:
             logger.error(f"Failed to load settings: {e}")
-
-    if TEMPMAIL_FILE.exists():
-        try:
-            with TEMPMAIL_FILE.open("r") as f:
-                data = json.load(f)
-                for uid, mail_data in data.items():
-                    TEMPMAILS[uid] = TempMailAccount(**mail_data)
-            logger.info(f"Loaded {len(TEMPMAILS)} tempmail accounts")
-        except Exception as e:
-            logger.error(f"Failed to load tempmails: {e}")
 
     if ADMIN_ID and ADMIN_ID not in USERS:
         USERS[ADMIN_ID] = User(
@@ -190,13 +170,6 @@ def save_settings():
             json.dump(asdict(SETTINGS), f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save settings: {e}")
-
-def save_tempmails():
-    try:
-        with TEMPMAIL_FILE.open("w") as f:
-            json.dump({k: asdict(v) for k, v in TEMPMAILS.items()}, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save tempmails: {e}")
 
 def get_or_create_user(user_id: int, username: str = "", first_name: str = "") -> User:
     if user_id not in USERS:
@@ -233,9 +206,7 @@ def has_access(user_id: int) -> bool:
 def get_access_status(user_id: int) -> str:
     if is_admin(user_id):
         return "ADMIN"
-    if user_id not in USERS:
-        return "NO ACCESS"
-    if not has_access(user_id):
+    if user_id not in USERS or not has_access(user_id):
         return "NO ACCESS"
     user = USERS[user_id]
     if user.access_expires == float('inf'):
@@ -273,7 +244,6 @@ def create_access_key(duration_days: int = 0, duration_hours: int = 0, is_lifeti
         created_by=created_by,
         note=note
     )
-
     KEYS[key] = access_key
     save_keys()
     return access_key
@@ -317,10 +287,7 @@ def redeem_key(user_id: int, key_string: str) -> Dict[str, Any]:
     save_users()
     save_keys()
 
-    if key.is_lifetime:
-        duration_msg = "LIFETIME ACCESS"
-    else:
-        duration_msg = f"{key.duration_days}D {key.duration_hours}H"
+    duration_msg = "LIFETIME ACCESS" if key.is_lifetime else f"{key.duration_days}D {key.duration_hours}H"
 
     return {
         "success": True,
@@ -351,38 +318,7 @@ def revoke_key(key_string: str) -> Dict[str, Any]:
             save_users()
 
     save_keys()
-
     return {"success": True, "message": f"✓ Key {key_string} has been revoked."}
-
-# ============================================================
-# TEMPMAIL FUNCTIONS
-# ============================================================
-
-async def generate_tempmail(session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
-    try:
-        async with session.get(f"{TEMPMAIL_API}/tempmail/gen", timeout=30) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data
-            return None
-    except Exception as e:
-        logger.error(f"TempMail generation error: {e}")
-        return None
-
-async def check_tempmail_inbox(session: aiohttp.ClientSession, token: str) -> Optional[Dict[str, Any]]:
-    try:
-        async with session.get(
-            f"{TEMPMAIL_API}/tempmail/inbox",
-            params={"token": token},
-            timeout=30
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data
-            return None
-    except Exception as e:
-        logger.error(f"TempMail inbox check error: {e}")
-        return None
 
 # ============================================================
 # KEYBOARDS
@@ -391,22 +327,22 @@ async def check_tempmail_inbox(session: aiohttp.ClientSession, token: str) -> Op
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if is_admin(user_id):
         rows = [
-            ["▸ Boost Services", "▸ Temp Mail"],
-            ["▸ My Statistics", "▸ Help"],
-            ["▸ Generate Key", "▸ Admin Panel"]
+            ["▸ Boost Services", "▸ TikTok Downloader"],
+            ["▸ FB Report", "▸ My Statistics"],
+            ["▸ Help", "▸ Generate Key"],
+            ["▸ Admin Panel"]
         ]
     elif has_access(user_id):
         rows = [
-            ["▸ Boost Services", "▸ Temp Mail"],
-            ["▸ My Statistics", "▸ Help"],
-            ["▸ Redeem Key"]
+            ["▸ Boost Services", "▸ TikTok Downloader"],
+            ["▸ FB Report", "▸ My Statistics"],
+            ["▸ Help", "▸ Redeem Key"]
         ]
     else:
         rows = [
             ["▸ Get Access", "▸ Help"],
             ["▸ My Statistics"]
         ]
-
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def boost_category_keyboard() -> InlineKeyboardMarkup:
@@ -447,14 +383,6 @@ def facebook_services_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def tempmail_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [InlineKeyboardButton("◈ Generate New Email", callback_data="tempmail:generate")],
-        [InlineKeyboardButton("◈ Check Inbox", callback_data="tempmail:inbox")],
-        [InlineKeyboardButton("« Main Menu", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
 def admin_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         ["▸ Generate Key", "▸ List Keys"],
@@ -473,7 +401,7 @@ def key_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 # ============================================================
-# ERROR HANDLER (GLOBAL)
+# ERROR HANDLER
 # ============================================================
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -490,6 +418,188 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             )
     except Exception:
         pass
+
+# ============================================================
+# TIKTOK DOWNLOADER FUNCTION
+# ============================================================
+
+async def download_tiktok_video(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    user = update.effective_user
+    get_or_create_user(user.id, user.username or "", user.first_name or "")
+    
+    msg = await update.message.reply_text("▸ Fetching TikTok video... Please wait.")
+    
+    encoded_url = quote(url, safe='')
+    api_url = f"{TIKTOK_API}?url={encoded_url}"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, timeout=30) as response:
+                if response.status != 200:
+                    await msg.edit_text("× Failed to fetch video. API error.")
+                    return
+                
+                data = await response.json()
+                
+                if "error" in data or "answer" not in data:
+                    await msg.edit_text("× Failed to extract video. Invalid link or private video.")
+                    return
+                
+                answer = data.get("answer", {})
+                video_url = answer.get("downloadLink")
+                author = answer.get("author", "Unknown")
+                description = answer.get("description", "No description")
+                likes = answer.get("likes", "0")
+                comments = answer.get("comments", "0")
+                
+                if not video_url:
+                    await msg.edit_text("× Video URL not found in response.")
+                    return
+                
+                caption = (
+                    f"◈ TikTok Video Downloaded\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"▸ Author : {author}\n"
+                    f"▸ Likes  : {likes}\n"
+                    f"▸ Comments: {comments}\n\n"
+                    f"▸ Description:\n{description}"
+                )
+                
+                await msg.edit_text("▸ Uploading video...")
+                
+                await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=video_url,
+                    caption=caption,
+                    supports_streaming=True
+                )
+                
+                await msg.delete()
+                
+    except asyncio.TimeoutError:
+        await msg.edit_text("× Request timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"TikTok Download Error: {type(e).__name__}: {e}")
+        await msg.edit_text("× An error occurred while processing the video.")
+
+# ============================================================
+# FB REPORT FUNCTION (ASYNC)
+# ============================================================
+
+async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: str, count: int, progress_msg, update: Update):
+    """
+    Gumagawa ng report gamit ang mbasic.facebook.com support form.
+    Ginagamit ang aiohttp para hindi mag-hang ang bot.
+    """
+    email = f"whisper{random.randint(100, 999999999)}@gmail.com"
+    
+    # Headers para sa GET request (kukunin ang lsd at jazoest)
+    get_headers = {
+        "Host": "mbasic.facebook.com",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    
+    success_count = 0
+    failed_count = 0
+    
+    try:
+        # Step 1: Kunin ang lsd at jazoest
+        async with session.get(FB_REPORT_URL, headers=get_headers, timeout=30) as response:
+            if response.status != 200:
+                await progress_msg.edit_text(f"× Failed to load FB form. Status: {response.status}")
+                return
+            html = await response.text()
+        
+        try:
+            jazoest = html.split('jazoest" value="')[1].split('"')[0]
+            lsd = html.split('name="lsd" value="')[1].split('"')[0]
+        except IndexError:
+            await progress_msg.edit_text("× Failed to parse FB form tokens.")
+            return
+        
+        # Step 2: Mag-report nang ilang beses
+        post_headers = {
+            "Host": "mbasic.facebook.com",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Origin": "https://mbasic.facebook.com",
+            "Referer": "https://mbasic.facebook.com/help/contact/209046679279097",
+        }
+        
+        for i in range(count):
+            # Bagong email kada report para hindi ma-detect
+            email = f"whisper{random.randint(100, 999999999)}@gmail.com"
+            
+            data = {
+                "lsd": lsd,
+                "jazoest": jazoest,
+                "crt_url": f"https://www.facebook.com/profile.php?id={fb_id}",
+                "crt_name": fb_name,
+                "cf_age": "12 years",
+                "Field255260417881843": "Close that account soon as possible please",
+                "Field166040066844792": email,
+                "source": "",
+                "form_id": "209046679279097",
+                "support_form_id": "209046679279097",
+                "support_form_locale_id": "en_US",
+                "support_form_hidden_fields": "[]",
+                "support_form_fact_false_fields": "[]",
+            }
+            
+            try:
+                async with session.post(FB_SUBMIT_URL, data=data, headers=post_headers, timeout=30) as resp:
+                    if resp.status == 200:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+            except Exception:
+                failed_count += 1
+            
+            # Update progress every 5 reports
+            if (i + 1) % 5 == 0 or (i + 1) == count:
+                try:
+                    await progress_msg.edit_text(
+                        f"▸ Reporting... {i + 1}/{count}\n"
+                        f"▸ Success: {success_count} | Failed: {failed_count}"
+                    )
+                except:
+                    pass
+            
+            # Delay para hindi ma-rate limit
+            await asyncio.sleep(1.5)
+        
+        # Final message
+        await progress_msg.edit_text(
+            "╔════════════════════════════╗\n"
+            "║      FB REPORT DONE        ║\n"
+            "╚════════════════════════════╝\n\n"
+            f"▸ Target ID   : {fb_id}\n"
+            f"▸ Target Name : {fb_name}\n"
+            f"▸ Total Sent  : {count}\n"
+            f"▸ Success     : {success_count}\n"
+            f"▸ Failed      : {failed_count}\n\n"
+            "▸ Note: Reports are sent anonymously."
+        )
+        
+        # Notify admin
+        try:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"◈ FB REPORT USED\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"▸ User   : {update.effective_user.first_name}\n"
+                f"▸ ID     : {update.effective_user.id}\n"
+                f"▸ Target : {fb_id} ({fb_name})\n"
+                f"▸ Count  : {count}"
+            )
+        except:
+            pass
+        
+    except Exception as e:
+        logger.error(f"FB Report Error: {type(e).__name__}: {e}")
+        await progress_msg.edit_text(f"× Error: {e}")
 
 # ============================================================
 # HANDLERS
@@ -517,7 +627,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "▸ AVAILABLE SERVICES\n"
         "  ◈ Social Media Boosting\n"
-        "  ◈ Temporary Email\n\n"
+        "  ◈ TikTok Video Downloader\n"
+        "  ◈ Facebook Mass Report\n\n"
     )
 
     if not has_access(user.id) and not is_admin(user.id):
@@ -549,225 +660,9 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Your ID      : {user.id}\n"
         f"▸ Username     : @{user.username or 'none'}\n"
         f"▸ First Name   : {user.first_name}\n"
-        f"▸ ADMIN_ID     : {ADMIN_ID}\n"
         f"▸ Is Admin?    : {'YES ✅' if is_admin(user.id) else 'NO ❌'}\n"
         f"▸ Has Access?  : {'YES ✅' if has_access(user.id) else 'NO ❌'}"
     )
-
-async def tempmail_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    if is_banned(user.id):
-        await update.message.reply_text("× You are banned from this bot.")
-        return
-
-    get_or_create_user(user.id, user.username or "", user.first_name or "")
-    context.user_data.clear()
-
-    if not has_access(user.id):
-        await update.message.reply_text(
-            "× You need access to use Temp Mail.\n\n"
-            "▸ Get your key from admin\n"
-            "▸ Use '▸ Get Access' to redeem!",
-            reply_markup=main_keyboard(user.id)
-        )
-        return
-
-    user_id_str = str(user.id)
-    existing_mail = TEMPMAILS.get(user_id_str)
-
-    if existing_mail:
-        message = (
-            "╔════════════════════════════╗\n"
-            "║      TEMP MAIL             ║\n"
-            "╚════════════════════════════╝\n\n"
-            f"▸ Current Email :\n"
-            f"  {existing_mail.email}\n\n"
-            f"▸ Password : {existing_mail.password}\n\n"
-            "▸ Options :"
-        )
-    else:
-        message = (
-            "╔════════════════════════════╗\n"
-            "║      TEMP MAIL             ║\n"
-            "╚════════════════════════════╝\n\n"
-            "▸ Generate a temporary email\n"
-            "▸ Use it for registrations\n"
-            "▸ Check inbox for messages\n\n"
-            "▸ Options :"
-        )
-
-    await update.message.reply_text(
-        message,
-        reply_markup=tempmail_keyboard()
-    )
-
-async def handle_tempmail_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    logger.info(f"🔔 TEMPMAIL CALLBACK: {query.data} from user {query.from_user.id}")
-    await query.answer()
-
-    data = query.data
-
-    try:
-        if data == "main_menu":
-            try:
-                await query.edit_message_text(
-                    "▸ Main Menu :",
-                    reply_markup=main_keyboard(query.from_user.id)
-                )
-            except Exception as e:
-                logger.error(f"❌ MAIN MENU EDIT ERROR: {e}")
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="▸ Main Menu :",
-                    reply_markup=main_keyboard(query.from_user.id)
-                )
-            return
-
-        if data == "tempmail:generate":
-            try:
-                await query.edit_message_text("▸ Generating temporary email...")
-            except Exception as e:
-                logger.error(f"❌ Edit loading error: {e}")
-
-            async with aiohttp.ClientSession() as session:
-                result = await generate_tempmail(session)
-
-            if result and result.get("email"):
-                user_id_str = str(query.from_user.id)
-                tempmail = TempMailAccount(
-                    email=result.get("email", ""),
-                    password=result.get("password", ""),
-                    token=result.get("token", ""),
-                    account_id=result.get("id", ""),
-                    created_at=time.time(),
-                    user_id=query.from_user.id
-                )
-                TEMPMAILS[user_id_str] = tempmail
-                save_tempmails()
-                logger.info(f"✅ TEMPMAIL GENERATED: {tempmail.email}")
-
-                try:
-                    await query.edit_message_text(
-                        "╔════════════════════════════╗\n"
-                        "║   TEMP MAIL GENERATED      ║\n"
-                        "╚════════════════════════════╝\n\n"
-                        f"▸ Email    : {tempmail.email}\n"
-                        f"▸ Password : {tempmail.password}\n\n"
-                        "▸ Save these details!\n"
-                        "▸ Use 'Check Inbox' to see messages."
-                    )
-                except Exception as e:
-                    logger.error(f"❌ Edit result error: {e}")
-                    await context.bot.send_message(
-                        chat_id=query.message.chat_id,
-                        text=(
-                            "╔════════════════════════════╗\n"
-                            "║   TEMP MAIL GENERATED      ║\n"
-                            "╚════════════════════════════╝\n\n"
-                            f"▸ Email    : {tempmail.email}\n"
-                            f"▸ Password : {tempmail.password}"
-                        )
-                    )
-            else:
-                try:
-                    await query.edit_message_text(
-                        "× Failed to generate email.\n"
-                        "× Please try again later."
-                    )
-                except Exception as e:
-                    logger.error(f"❌ Edit fail error: {e}")
-            return
-
-        if data == "tempmail:inbox":
-            user_id_str = str(query.from_user.id)
-            existing_mail = TEMPMAILS.get(user_id_str)
-
-            if not existing_mail:
-                try:
-                    await query.edit_message_text(
-                        "× No email generated yet.\n"
-                        "▸ Generate one first!"
-                    )
-                except Exception as e:
-                    logger.error(f"❌ Edit no-mail error: {e}")
-                return
-
-            try:
-                await query.edit_message_text("▸ Checking inbox...")
-            except Exception as e:
-                logger.error(f"❌ Edit loading inbox error: {e}")
-
-            async with aiohttp.ClientSession() as session:
-                result = await check_tempmail_inbox(session, existing_mail.token)
-
-            if result:
-                if "error" in result:
-                    try:
-                        await query.edit_message_text(
-                            "× Token expired or invalid.\n"
-                            "▸ Generate a new email."
-                        )
-                    except Exception as e:
-                        logger.error(f"❌ Edit token error: {e}")
-                else:
-                    messages = result.get("hydra:member", result.get("messages", []))
-
-                    if not messages:
-                        try:
-                            await query.edit_message_text(
-                                "◈ INBOX EMPTY\n\n"
-                                f"▸ Email : {existing_mail.email}\n"
-                                "▸ No messages received yet."
-                            )
-                        except Exception as e:
-                            logger.error(f"❌ Edit empty error: {e}")
-                    else:
-                        inbox_text = (
-                            "╔════════════════════════════╗\n"
-                            "║      INBOX MESSAGES        ║\n"
-                            "╚════════════════════════════╝\n\n"
-                        )
-
-                        for msg in messages[:5]:
-                            sender = msg.get("from", {}).get("address", "Unknown")
-                            subject = msg.get("subject", "No Subject")
-                            date = msg.get("createdAt", "")
-                            intro = msg.get("intro", "")
-
-                            inbox_text += (
-                                f"▸ From    : {sender}\n"
-                                f"▸ Subject : {subject}\n"
-                                f"▸ Date    : {date}\n"
-                                f"▸ Preview : {intro}\n"
-                                "━━━━━━━━━━━━━━━━━━━━\n"
-                            )
-
-                        try:
-                            await query.edit_message_text(inbox_text)
-                        except Exception as e:
-                            logger.error(f"❌ Edit inbox error: {e}")
-                            await context.bot.send_message(
-                                chat_id=query.message.chat_id,
-                                text=inbox_text
-                            )
-            else:
-                try:
-                    await query.edit_message_text(
-                        "× Failed to check inbox.\n"
-                        "× Please try again later."
-                    )
-                except Exception as e:
-                    logger.error(f"❌ Edit inbox fail error: {e}")
-            return
-
-    except Exception as e:
-        logger.error(f"❌ TEMPMAIL OUTER ERROR: {type(e).__name__}: {e}")
-        try:
-            await query.edit_message_text(f"× Error: {e}")
-        except:
-            pass
 
 async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -807,43 +702,26 @@ async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.info(f"🔔 BOOST CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
 
     data = query.data
 
     try:
         if data == "main_menu":
-            try:
-                await query.edit_message_text(
-                    "▸ Main Menu :",
-                    reply_markup=main_keyboard(query.from_user.id)
-                )
-            except Exception as e:
-                logger.error(f"❌ Edit main menu error: {e}")
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="▸ Main Menu :",
-                    reply_markup=main_keyboard(query.from_user.id)
-                )
+            await query.edit_message_text(
+                "▸ Main Menu :",
+                reply_markup=main_keyboard(query.from_user.id)
+            )
             return
 
         if data == "back_to_categories":
-            try:
-                await query.edit_message_text(
-                    "╔════════════════════════════╗\n"
-                    "║    BOOST SERVICES          ║\n"
-                    "╚════════════════════════════╝\n\n"
-                    "▸ Select a platform :",
-                    reply_markup=boost_category_keyboard()
-                )
-            except Exception as e:
-                logger.error(f"❌ Edit back error: {e}")
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="▸ Select a platform :",
-                    reply_markup=boost_category_keyboard()
-                )
+            await query.edit_message_text(
+                "╔════════════════════════════╗\n"
+                "║    BOOST SERVICES          ║\n"
+                "╚════════════════════════════╝\n\n"
+                "▸ Select a platform :",
+                reply_markup=boost_category_keyboard()
+            )
             return
 
         if data.startswith("category:"):
@@ -876,23 +754,11 @@ async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 return
 
-            try:
-                await query.edit_message_text(text, reply_markup=kb)
-            except Exception as e:
-                logger.error(f"❌ Edit category error: {e}")
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=text,
-                    reply_markup=kb
-                )
+            await query.edit_message_text(text, reply_markup=kb)
             return
 
     except Exception as e:
-        logger.error(f"❌ BOOST OUTER ERROR: {type(e).__name__}: {e}")
-        try:
-            await query.edit_message_text(f"× Error: {e}")
-        except:
-            pass
+        logger.error(f"BOOST OUTER ERROR: {type(e).__name__}: {e}")
 
 async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -928,20 +794,18 @@ async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result['message'],
             reply_markup=main_keyboard(update.effective_user.id)
         )
-
         user = update.effective_user
-        if ADMIN_ID:
-            try:
-                await context.bot.send_message(
-                    ADMIN_ID,
-                    f"◈ KEY REDEEMED\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"▸ User : {user.first_name}\n"
-                    f"▸ ID   : {user.id}\n"
-                    f"▸ Key  : {key_string}"
-                )
-            except:
-                pass
+        try:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"◈ KEY REDEEMED\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"▸ User : {user.first_name}\n"
+                f"▸ ID   : {user.id}\n"
+                f"▸ Key  : {key_string}"
+            )
+        except:
+            pass
     else:
         await update.message.reply_text(result['message'])
         context.user_data['awaiting'] = 'key'
@@ -963,8 +827,114 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Total Clicks: {user.total_clicks}\n"
         f"▸ Joined     : {datetime.fromtimestamp(user.joined_at).strftime('%Y-%m-%d')}"
     )
-
     await update.message.reply_text(stats_text)
+
+# ============================================================
+# FB REPORT HANDLERS
+# ============================================================
+
+async def fb_report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if is_banned(user.id):
+        await update.message.reply_text("× You are banned from this bot.")
+        return
+
+    if not has_access(user.id) and not is_admin(user.id):
+        await update.message.reply_text(
+            "× You need access to use FB Report.\n\n"
+            "▸ Use '▸ Get Access' to redeem a key.",
+            reply_markup=main_keyboard(user.id)
+        )
+        return
+
+    context.user_data.clear()
+    context.user_data['awaiting'] = 'fb_id'
+
+    await update.message.reply_text(
+        "╔════════════════════════════╗\n"
+        "║     FACEBOOK REPORT        ║\n"
+        "╚════════════════════════════╝\n\n"
+        "▸ Enter the Facebook ID of the target :\n"
+        "▸ Example : 100012345678901\n\n"
+        "Type /cancel to go back."
+    )
+
+async def handle_fb_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    fb_id = update.message.text.strip()
+    
+    if not fb_id.isdigit():
+        await update.message.reply_text(
+            "× Invalid ID. Please enter numbers only.\n\n"
+            "Type /cancel to go back."
+        )
+        context.user_data['awaiting'] = 'fb_id'
+        return
+    
+    context.user_data['fb_id'] = fb_id
+    context.user_data['awaiting'] = 'fb_name'
+    
+    await update.message.reply_text(
+        "▸ Now enter the Facebook Name of the target :\n"
+        "▸ Example : John Doe\n\n"
+        "Type /cancel to go back."
+    )
+
+async def handle_fb_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    fb_name = update.message.text.strip()
+    
+    if len(fb_name) < 2:
+        await update.message.reply_text(
+            "× Name too short. Please enter a valid name.\n\n"
+            "Type /cancel to go back."
+        )
+        context.user_data['awaiting'] = 'fb_name'
+        return
+    
+    context.user_data['fb_name'] = fb_name
+    context.user_data['awaiting'] = 'fb_count'
+    
+    await update.message.reply_text(
+        "▸ How many reports to send? (1-50)\n"
+        "▸ Example : 10\n\n"
+        "Type /cancel to go back."
+    )
+
+async def handle_fb_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    
+    try:
+        count = int(text)
+        if count < 1 or count > 50:
+            raise ValueError("Count must be 1-50")
+    except ValueError:
+        await update.message.reply_text(
+            "× Invalid count. Please enter a number between 1 and 50.\n\n"
+            "Type /cancel to go back."
+        )
+        context.user_data['awaiting'] = 'fb_count'
+        return
+    
+    fb_id = context.user_data.get('fb_id')
+    fb_name = context.user_data.get('fb_name')
+    
+    if not fb_id or not fb_name:
+        await update.message.reply_text("× Session expired. Please start again.")
+        context.user_data.clear()
+        return
+    
+    # Clear state
+    context.user_data.clear()
+    
+    progress_msg = await update.message.reply_text(
+        f"▸ Starting FB Report...\n"
+        f"▸ Target : {fb_name} ({fb_id})\n"
+        f"▸ Count  : {count}\n\n"
+        "▸ Please wait..."
+    )
+    
+    async with aiohttp.ClientSession() as session:
+        await fb_report_worker(session, fb_id, fb_name, count, progress_msg, update)
 
 # ============================================================
 # ADMIN HANDLERS
@@ -1000,7 +970,6 @@ async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.info(f"🔔 KEYGEN CALLBACK: {query.data} from user {query.from_user.id}")
     await query.answer()
 
     data = query.data
@@ -1016,8 +985,6 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
 
             if key_type == "lifetime":
                 key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
-                logger.info(f"✅ LIFETIME KEY CREATED: {key.key}")
-
                 await query.edit_message_text(
                     "╔════════════════════════════╗\n"
                     "║    KEY CREATED SUCCESS     ║\n"
@@ -1032,8 +999,6 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
 
             elif key_type == "custom":
                 context.user_data['awaiting'] = 'key_duration'
-                logger.info(f"📝 Awaiting custom duration from {query.from_user.id}")
-
                 await query.edit_message_text(
                     "╔════════════════════════════╗\n"
                     "║    CUSTOM KEY DURATION     ║\n"
@@ -1049,11 +1014,7 @@ async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TY
                 return
 
     except Exception as e:
-        logger.error(f"❌ KEYGEN ERROR: {type(e).__name__}: {e}")
-        try:
-            await query.edit_message_text(f"× Error: {e}")
-        except:
-            pass
+        logger.error(f"KEYGEN ERROR: {type(e).__name__}: {e}")
 
 async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -1088,7 +1049,6 @@ async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE
         duration_hours=hours,
         created_by=update.effective_user.id
     )
-    logger.info(f"✅ CUSTOM KEY CREATED: {key.key} ({days}D {hours}H)")
 
     await update.message.reply_text(
         "╔════════════════════════════╗\n"
@@ -1128,10 +1088,7 @@ async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             status = "AVAILABLE"
 
-        if key.is_lifetime:
-            duration = "LIFETIME"
-        else:
-            duration = f"{key.duration_days}D {key.duration_hours}H"
+        duration = "LIFETIME" if key.is_lifetime else f"{key.duration_days}D {key.duration_hours}H"
 
         message += (
             f"▸ Key      : {key.key}\n"
@@ -1150,7 +1107,6 @@ async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_users = sum(1 for u in USERS.values() if has_access(u.user_id))
     total_keys = len(KEYS)
     used_keys = sum(1 for k in KEYS.values() if k.used_by)
-    total_tempmails = len(TEMPMAILS)
 
     stats_text = (
         "╔════════════════════════════╗\n"
@@ -1161,7 +1117,6 @@ async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▸ Total Keys    : {total_keys}\n"
         f"▸ Used Keys     : {used_keys}\n"
         f"▸ Total Clicks  : {SETTINGS.total_clicks}\n"
-        f"▸ TempMails     : {total_tempmails}\n"
         f"▸ Maintenance   : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
     )
 
@@ -1261,6 +1216,17 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     awaiting = context.user_data.get('awaiting')
 
+    # FB Report flow
+    if awaiting == 'fb_id':
+        await handle_fb_id(update, context)
+        return
+    if awaiting == 'fb_name':
+        await handle_fb_name(update, context)
+        return
+    if awaiting == 'fb_count':
+        await handle_fb_count(update, context)
+        return
+
     if awaiting == 'key':
         await handle_key_input(update, context)
         return
@@ -1277,10 +1243,32 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_revoke_key(update, context)
         return
 
+    # --- TIKTOK LINK DETECTION ---
+    if "tiktok.com" in text.lower():
+        if not has_access(user.id) and not is_admin(user.id):
+            await update.message.reply_text(
+                "× You need access to use the TikTok Downloader.\n\n"
+                "▸ Use '▸ Get Access' to redeem a key.",
+                reply_markup=main_keyboard(user.id)
+            )
+            return
+        
+        urls = [word for word in text.split() if "tiktok.com" in word.lower()]
+        if urls:
+            await download_tiktok_video(update, context, urls[0])
+            return
+
+    # --- MENU BUTTONS ---
     if text == "▸ Boost Services":
         await boost_services(update, context)
-    elif text == "▸ Temp Mail":
-        await tempmail_menu(update, context)
+    elif text == "▸ TikTok Downloader":
+        await update.message.reply_text(
+            "▸ Send me any TikTok video link and I will download it for you!\n\n"
+            "Example:\n"
+            "https://vt.tiktok.com/ZSpYgeCoc/"
+        )
+    elif text == "▸ FB Report":
+        await fb_report_menu(update, context)
     elif text == "▸ Get Access":
         await get_access(update, context)
     elif text == "▸ Redeem Key":
@@ -1289,19 +1277,19 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await my_stats(update, context)
     elif text == "▸ Help":
         await start(update, context)
-    elif text == "▸ Admin Panel" and is_admin(update.effective_user.id):
+    elif text == "▸ Admin Panel" and is_admin(user.id):
         await admin_panel(update, context)
-    elif text == "▸ Generate Key" and is_admin(update.effective_user.id):
+    elif text == "▸ Generate Key" and is_admin(user.id):
         await generate_key_admin(update, context)
-    elif text == "▸ List Keys" and is_admin(update.effective_user.id):
+    elif text == "▸ List Keys" and is_admin(user.id):
         await list_keys(update, context)
-    elif text == "▸ Global Stats" and is_admin(update.effective_user.id):
+    elif text == "▸ Global Stats" and is_admin(user.id):
         await global_stats(update, context)
-    elif text == "▸ Revoke Key" and is_admin(update.effective_user.id):
+    elif text == "▸ Revoke Key" and is_admin(user.id):
         await revoke_key_admin(update, context)
-    elif text == "▸ Broadcast" and is_admin(update.effective_user.id):
+    elif text == "▸ Broadcast" and is_admin(user.id):
         await broadcast(update, context)
-    elif text == "▸ Settings" and is_admin(update.effective_user.id):
+    elif text == "▸ Settings" and is_admin(user.id):
         await toggle_maintenance(update, context)
     elif text == "▸ Main Menu":
         await start(update, context)
@@ -1309,7 +1297,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "× Invalid option.\n"
             "▸ Please use the menu buttons below.",
-            reply_markup=main_keyboard(update.effective_user.id)
+            reply_markup=main_keyboard(user.id)
         )
 
 # ============================================================
@@ -1323,13 +1311,6 @@ def main():
 
     load_state()
 
-    # I-setup ang event loop para sa background thread
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_error_handler(error_handler)
@@ -1339,21 +1320,18 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
-    application.add_handler(CallbackQueryHandler(handle_tempmail_actions, pattern="^tempmail:"))
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
-    application.add_handler(CommandHandler("tempmail", tempmail_menu))
     application.add_handler(CommandHandler("whoami", whoami))
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("genkey", generate_key_admin))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
-    logger.info("Clout Premium Bot with TempMail started!")
+    logger.info("Clout Premium Bot with TikTok Downloader & FB Report started!")
     
-    # Idinagdag ang stop_signals=None para hindi mag-crash sa background thread ng Render
     application.run_polling(stop_signals=None)
 
 if __name__ == "__main__":
