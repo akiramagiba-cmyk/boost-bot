@@ -27,10 +27,6 @@ from telegram.ext import (
     filters,
 )
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8628435205:AAGjeWiQduB6c2S6YSW7BXEQP1bP2VedMeY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5728569894"))
 ADMIN_IDS = {ADMIN_ID}
@@ -49,10 +45,6 @@ SETTINGS_FILE = STATE_DIR / "settings.json"
 TIKTOK_API = "https://ceddsrestapi.vercel.app/downloader/tikdl"
 FB_REPORT_URL = "https://mbasic.facebook.com/help/contact/209046679279097"
 FB_SUBMIT_URL = "https://mbasic.facebook.com/a/help/contact_us/"
-
-# ============================================================
-# DATA MODELS
-# ============================================================
 
 @dataclass
 class User:
@@ -86,27 +78,15 @@ class BotSettings:
     total_clicks: int = 0
     key_required: bool = True
 
-# ============================================================
-# GLOBAL STATE
-# ============================================================
-
 USERS: Dict[int, User] = {}
 KEYS: Dict[str, AccessKey] = {}
 SETTINGS = BotSettings()
-
-# ============================================================
-# LOGGING
-# ============================================================
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger("clout-boost-bot")
-
-# ============================================================
-# STATE MANAGEMENT
-# ============================================================
 
 def load_state():
     global USERS, KEYS, SETTINGS
@@ -219,10 +199,6 @@ def get_access_status(user_id: int) -> str:
     minutes = int((remaining % 3600) // 60)
     return f"{days}D {hours}H {minutes}M LEFT"
 
-# ============================================================
-# KEY MANAGEMENT
-# ============================================================
-
 def generate_key() -> str:
     chars = string.ascii_uppercase + string.digits
     while True:
@@ -320,10 +296,6 @@ def revoke_key(key_string: str) -> Dict[str, Any]:
     save_keys()
     return {"success": True, "message": f"✓ Key {key_string} has been revoked."}
 
-# ============================================================
-# KEYBOARDS
-# ============================================================
-
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if is_admin(user_id):
         rows = [
@@ -400,10 +372,6 @@ def key_type_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# ============================================================
-# ERROR HANDLER
-# ============================================================
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
     try:
@@ -418,10 +386,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             )
     except Exception:
         pass
-
-# ============================================================
-# TIKTOK DOWNLOADER FUNCTION
-# ============================================================
 
 async def download_tiktok_video(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     user = update.effective_user
@@ -482,18 +446,9 @@ async def download_tiktok_video(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"TikTok Download Error: {type(e).__name__}: {e}")
         await msg.edit_text("× An error occurred while processing the video.")
 
-# ============================================================
-# FB REPORT FUNCTION (ASYNC)
-# ============================================================
-
 async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: str, count: int, progress_msg, update: Update):
-    """
-    Gumagawa ng report gamit ang mbasic.facebook.com support form.
-    Ginagamit ang aiohttp para hindi mag-hang ang bot.
-    """
     email = f"whisper{random.randint(100, 999999999)}@gmail.com"
     
-    # Headers para sa GET request (kukunin ang lsd at jazoest)
     get_headers = {
         "Host": "mbasic.facebook.com",
         "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
@@ -505,7 +460,6 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
     failed_count = 0
     
     try:
-        # Step 1: Kunin ang lsd at jazoest
         async with session.get(FB_REPORT_URL, headers=get_headers, timeout=30) as response:
             if response.status != 200:
                 await progress_msg.edit_text(f"× Failed to load FB form. Status: {response.status}")
@@ -519,7 +473,6 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
             await progress_msg.edit_text("× Failed to parse FB form tokens.")
             return
         
-        # Step 2: Mag-report nang ilang beses
         post_headers = {
             "Host": "mbasic.facebook.com",
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
@@ -529,7 +482,6 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
         }
         
         for i in range(count):
-            # Bagong email kada report para hindi ma-detect
             email = f"whisper{random.randint(100, 999999999)}@gmail.com"
             
             data = {
@@ -557,7 +509,6 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
             except Exception:
                 failed_count += 1
             
-            # Update progress every 5 reports
             if (i + 1) % 5 == 0 or (i + 1) == count:
                 try:
                     await progress_msg.edit_text(
@@ -567,10 +518,8 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
                 except:
                     pass
             
-            # Delay para hindi ma-rate limit
             await asyncio.sleep(1.5)
         
-        # Final message
         await progress_msg.edit_text(
             "╔════════════════════════════╗\n"
             "║      FB REPORT DONE        ║\n"
@@ -583,7 +532,6 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
             "▸ Note: Reports are sent anonymously."
         )
         
-        # Notify admin
         try:
             await context.bot.send_message(
                 ADMIN_ID,
@@ -600,10 +548,6 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
     except Exception as e:
         logger.error(f"FB Report Error: {type(e).__name__}: {e}")
         await progress_msg.edit_text(f"× Error: {e}")
-
-# ============================================================
-# HANDLERS
-# ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -829,10 +773,6 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(stats_text)
 
-# ============================================================
-# FB REPORT HANDLERS
-# ============================================================
-
 async def fb_report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -923,7 +863,6 @@ async def handle_fb_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         return
     
-    # Clear state
     context.user_data.clear()
     
     progress_msg = await update.message.reply_text(
@@ -935,10 +874,6 @@ async def handle_fb_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     async with aiohttp.ClientSession() as session:
         await fb_report_worker(session, fb_id, fb_name, count, progress_msg, update)
-
-# ============================================================
-# ADMIN HANDLERS
-# ============================================================
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -1204,10 +1139,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(update.effective_user.id)
     )
 
-# ============================================================
-# MESSAGE HANDLER
-# ============================================================
-
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
@@ -1216,7 +1147,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     awaiting = context.user_data.get('awaiting')
 
-    # FB Report flow
     if awaiting == 'fb_id':
         await handle_fb_id(update, context)
         return
@@ -1243,7 +1173,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_revoke_key(update, context)
         return
 
-    # --- TIKTOK LINK DETECTION ---
     if "tiktok.com" in text.lower():
         if not has_access(user.id) and not is_admin(user.id):
             await update.message.reply_text(
@@ -1258,7 +1187,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await download_tiktok_video(update, context, urls[0])
             return
 
-    # --- MENU BUTTONS ---
     if text == "▸ Boost Services":
         await boost_services(update, context)
     elif text == "▸ TikTok Downloader":
@@ -1300,10 +1228,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard(user.id)
         )
 
-# ============================================================
-# MAIN
-# ============================================================
-
 def main():
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set!")
@@ -1330,7 +1254,7 @@ def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
-    logger.info("Clout Premium Bot with TikTok Downloader & FB Report started!")
+    logger.info("Clout Premium Bot started!")
     
     application.run_polling(stop_signals=None)
 
