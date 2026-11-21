@@ -18,10 +18,8 @@ def home():
 
 def start_bot():
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         logger.info("Starting Telegram bot in background thread...")
-        run_telegram_bot()
+        asyncio.run(run_telegram_bot())
     except Exception as e:
         logger.error(f"Bot thread crashed: {type(e).__name__}: {e}")
 
